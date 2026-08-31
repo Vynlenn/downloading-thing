@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using DeezNutzDownloader.Core.Settings;
 
@@ -46,10 +46,28 @@ public sealed class SettingsStore
                     "The settings file contained no settings.");
             }
 
+            bool settingsChanged = false;
+
             if (string.IsNullOrWhiteSpace(settings.DownloadFolder))
             {
                 settings.DownloadFolder =
                     DefaultSettingsFactory.GetDefaultDownloadFolder();
+
+                settingsChanged = true;
+            }
+
+            // Version 2 introduces the Dark Jade default theme.
+            // Existing version-1 settings are migrated only once.
+            if (settings.ConfigurationVersion < 2)
+            {
+                settings.ConfigurationVersion = 2;
+                settings.Theme = AppTheme.Dark;
+                settingsChanged = true;
+            }
+
+            if (settingsChanged)
+            {
+                await SaveAsync(settings);
             }
 
             return settings;

@@ -1,4 +1,4 @@
-﻿namespace DeezNutzDownloader.Core.Settings;
+namespace DeezNutzDownloader.Core.Settings;
 
 public enum AppTheme
 {
@@ -24,11 +24,11 @@ public enum ProxyType
 
 public sealed class AppSettings
 {
-    public int ConfigurationVersion { get; set; } = 1;
+    public int ConfigurationVersion { get; set; } = 2;
 
     public string DownloadFolder { get; set; } = string.Empty;
 
-    public AppTheme Theme { get; set; } = AppTheme.System;
+    public AppTheme Theme { get; set; } = AppTheme.Dark;
 
     public NetworkMode NetworkMode { get; set; } = NetworkMode.WindowsSettings;
 

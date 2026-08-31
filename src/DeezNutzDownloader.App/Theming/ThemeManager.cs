@@ -1,4 +1,4 @@
-﻿using System.Windows;
+using System.Windows;
 using System.Windows.Media;
 using DeezNutzDownloader.Core.Settings;
 using Microsoft.Win32;
@@ -22,54 +22,54 @@ public static class ThemeManager
         if (useDarkTheme)
         {
             resources["AppBackgroundBrush"] =
-                Brush("#FF11141B");
+                Brush("#FF08110D");
 
             resources["SurfaceBrush"] =
-                Brush("#FF1B202A");
+                Brush("#FF101C17");
 
             resources["SurfaceSecondaryBrush"] =
-                Brush("#FF272D39");
+                Brush("#FF182821");
 
             resources["TextBrush"] =
-                Brush("#FFF2F4F8");
+                Brush("#FFE8F3ED");
 
             resources["MutedTextBrush"] =
-                Brush("#FFAAB2C0");
+                Brush("#FF91A89C");
 
             resources["BorderBrush"] =
-                Brush("#FF343C49");
+                Brush("#FF284137");
 
             resources["AccentBrush"] =
-                Brush("#FF777EF2");
+                Brush("#FF168664");
 
             resources["AccentHoverBrush"] =
-                Brush("#FF858BF5");
+                Brush("#FF1CA878");
         }
         else
         {
             resources["AppBackgroundBrush"] =
-                Brush("#FFF4F6FA");
+                Brush("#FFF2F7F4");
 
             resources["SurfaceBrush"] =
                 Brush("#FFFFFFFF");
 
             resources["SurfaceSecondaryBrush"] =
-                Brush("#FFEEF1F6");
+                Brush("#FFE8F1EC");
 
             resources["TextBrush"] =
-                Brush("#FF18202C");
+                Brush("#FF14231C");
 
             resources["MutedTextBrush"] =
-                Brush("#FF647084");
+                Brush("#FF667B70");
 
             resources["BorderBrush"] =
-                Brush("#FFD9DEE8");
+                Brush("#FFD2E1D9");
 
             resources["AccentBrush"] =
-                Brush("#FF5C63E8");
+                Brush("#FF147A5C");
 
             resources["AccentHoverBrush"] =
-                Brush("#FF4D54D8");
+                Brush("#FF0F674E");
         }
     }
 

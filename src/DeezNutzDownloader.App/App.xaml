@@ -1,18 +1,18 @@
-﻿<Application x:Class="DeezNutzDownloader.App.App"
+<Application x:Class="DeezNutzDownloader.App.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              Startup="Application_Startup"
              DispatcherUnhandledException="Application_DispatcherUnhandledException"
              ShutdownMode="OnMainWindowClose">
     <Application.Resources>
-        <SolidColorBrush x:Key="AppBackgroundBrush" Color="#FFF4F6FA" />
-        <SolidColorBrush x:Key="SurfaceBrush" Color="#FFFFFFFF" />
-        <SolidColorBrush x:Key="SurfaceSecondaryBrush" Color="#FFEEF1F6" />
-        <SolidColorBrush x:Key="TextBrush" Color="#FF18202C" />
-        <SolidColorBrush x:Key="MutedTextBrush" Color="#FF647084" />
-        <SolidColorBrush x:Key="BorderBrush" Color="#FFD9DEE8" />
-        <SolidColorBrush x:Key="AccentBrush" Color="#FF5C63E8" />
-        <SolidColorBrush x:Key="AccentHoverBrush" Color="#FF4D54D8" />
+        <SolidColorBrush x:Key="AppBackgroundBrush" Color="#FF08110D" />
+        <SolidColorBrush x:Key="SurfaceBrush" Color="#FF101C17" />
+        <SolidColorBrush x:Key="SurfaceSecondaryBrush" Color="#FF182821" />
+        <SolidColorBrush x:Key="TextBrush" Color="#FFE8F3ED" />
+        <SolidColorBrush x:Key="MutedTextBrush" Color="#FF91A89C" />
+        <SolidColorBrush x:Key="BorderBrush" Color="#FF284137" />
+        <SolidColorBrush x:Key="AccentBrush" Color="#FF168664" />
+        <SolidColorBrush x:Key="AccentHoverBrush" Color="#FF1CA878" />
 
         <Style TargetType="Window">
             <Setter Property="Background"

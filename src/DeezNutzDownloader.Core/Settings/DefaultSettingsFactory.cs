@@ -1,4 +1,4 @@
-﻿namespace DeezNutzDownloader.Core.Settings;
+namespace DeezNutzDownloader.Core.Settings;
 
 public static class DefaultSettingsFactory
 {
@@ -7,7 +7,7 @@ public static class DefaultSettingsFactory
         return new AppSettings
         {
             DownloadFolder = GetDefaultDownloadFolder(),
-            Theme = AppTheme.System,
+            Theme = AppTheme.Dark,
             NetworkMode = NetworkMode.WindowsSettings,
             ProxyType = ProxyType.Http,
             ProxyPort = 8080,
