@@ -1,0 +1,57 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{BD1248D8-ACB8-4B9A-8B50-F36A5D1D917F}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DeezNutzDownloader.App", "src\DeezNutzDownloader.App\DeezNutzDownloader.App.csproj", "{70322603-326E-4B09-92F7-FDE4F92B90E0}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DeezNutzDownloader.Core", "src\DeezNutzDownloader.Core\DeezNutzDownloader.Core.csproj", "{B7CF3D9F-7FD1-4945-A098-6AD9B4358108}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DeezNutzDownloader.Infrastructure", "src\DeezNutzDownloader.Infrastructure\DeezNutzDownloader.Infrastructure.csproj", "{73472190-E9C3-4442-A04C-54B8A0574BD6}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DeezNutzDownloader.Adapters", "src\DeezNutzDownloader.Adapters\DeezNutzDownloader.Adapters.csproj", "{9628D231-04D4-4D88-9BAB-888336A70367}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{92418970-A4CA-4138-B863-E6EFA58387B5}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DeezNutzDownloader.Tests", "tests\DeezNutzDownloader.Tests\DeezNutzDownloader.Tests.csproj", "{EE630B0F-C2E3-4539-8CC8-86AD3CF181C3}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{70322603-326E-4B09-92F7-FDE4F92B90E0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{70322603-326E-4B09-92F7-FDE4F92B90E0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{70322603-326E-4B09-92F7-FDE4F92B90E0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{70322603-326E-4B09-92F7-FDE4F92B90E0}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B7CF3D9F-7FD1-4945-A098-6AD9B4358108}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B7CF3D9F-7FD1-4945-A098-6AD9B4358108}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B7CF3D9F-7FD1-4945-A098-6AD9B4358108}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B7CF3D9F-7FD1-4945-A098-6AD9B4358108}.Release|Any CPU.Build.0 = Release|Any CPU
+		{73472190-E9C3-4442-A04C-54B8A0574BD6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{73472190-E9C3-4442-A04C-54B8A0574BD6}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{73472190-E9C3-4442-A04C-54B8A0574BD6}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{73472190-E9C3-4442-A04C-54B8A0574BD6}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9628D231-04D4-4D88-9BAB-888336A70367}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9628D231-04D4-4D88-9BAB-888336A70367}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9628D231-04D4-4D88-9BAB-888336A70367}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9628D231-04D4-4D88-9BAB-888336A70367}.Release|Any CPU.Build.0 = Release|Any CPU
+		{EE630B0F-C2E3-4539-8CC8-86AD3CF181C3}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EE630B0F-C2E3-4539-8CC8-86AD3CF181C3}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EE630B0F-C2E3-4539-8CC8-86AD3CF181C3}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EE630B0F-C2E3-4539-8CC8-86AD3CF181C3}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{70322603-326E-4B09-92F7-FDE4F92B90E0} = {BD1248D8-ACB8-4B9A-8B50-F36A5D1D917F}
+		{B7CF3D9F-7FD1-4945-A098-6AD9B4358108} = {BD1248D8-ACB8-4B9A-8B50-F36A5D1D917F}
+		{73472190-E9C3-4442-A04C-54B8A0574BD6} = {BD1248D8-ACB8-4B9A-8B50-F36A5D1D917F}
+		{9628D231-04D4-4D88-9BAB-888336A70367} = {BD1248D8-ACB8-4B9A-8B50-F36A5D1D917F}
+		{EE630B0F-C2E3-4539-8CC8-86AD3CF181C3} = {92418970-A4CA-4138-B863-E6EFA58387B5}
+	EndGlobalSection
+EndGlobal

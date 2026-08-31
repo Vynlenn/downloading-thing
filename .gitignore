@@ -1,0 +1,31 @@
+﻿# .NET build output
+bin/
+obj/
+artifacts/
+TestResults/
+
+# Visual Studio and IDE files
+.vs/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Application runtime data
+data/
+logs/
+settings.json
+*.log
+
+# Portable-mode marker is created during publishing
+portable.flag
+
+# Bundled helper binaries will be managed separately
+tools/bin/
+
+# Temporary and backup files
+*.tmp
+*.bak
+*.old
+.checkpoint-backups/
