@@ -268,14 +268,17 @@ public partial class MainWindow : Window
                 ? Visibility.Visible
                 : Visibility.Collapsed;
 
-        DownloadsNavigationButton.Opacity =
-            pageName == "Downloads" ? 1.0 : 0.65;
+        ApplyNavigationState(
+            DownloadsNavigationButton,
+            pageName == "Downloads");
 
-        LinkGrabberNavigationButton.Opacity =
-            pageName == "LinkGrabber" ? 1.0 : 0.65;
+        ApplyNavigationState(
+            LinkGrabberNavigationButton,
+            pageName == "LinkGrabber");
 
-        SettingsNavigationButton.Opacity =
-            pageName == "Settings" ? 1.0 : 0.65;
+        ApplyNavigationState(
+            SettingsNavigationButton,
+            pageName == "Settings");
 
         switch (pageName)
         {
@@ -299,6 +302,18 @@ public partial class MainWindow : Window
         }
     }
 
+    private static void ApplyNavigationState(
+        System.Windows.Controls.Button button,
+        bool isSelected)
+    {
+        button.Opacity = 1.0;
+
+        button.SetResourceReference(
+            FrameworkElement.StyleProperty,
+            isSelected
+                ? "SelectedNavigationButtonStyle"
+                : "NavigationButtonStyle");
+    }
     private void UpdateManualProxyState()
     {
         if (ManualProxyPanel is null ||

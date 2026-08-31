@@ -22,28 +22,43 @@ public static class ThemeManager
         if (useDarkTheme)
         {
             resources["AppBackgroundBrush"] =
-                Brush("#FF08110D");
+                Brush("#FF060C09");
 
             resources["SurfaceBrush"] =
-                Brush("#FF101C17");
+                Brush("#FF0E1B15");
 
             resources["SurfaceSecondaryBrush"] =
-                Brush("#FF182821");
+                Brush("#FF162A20");
 
             resources["TextBrush"] =
-                Brush("#FFE8F3ED");
+                Brush("#FFF1FBF6");
 
             resources["MutedTextBrush"] =
-                Brush("#FF91A89C");
+                Brush("#FFA6BBAF");
 
             resources["BorderBrush"] =
-                Brush("#FF284137");
+                Brush("#FF2D5141");
 
             resources["AccentBrush"] =
-                Brush("#FF168664");
+                Brush("#FF18A875");
 
             resources["AccentHoverBrush"] =
-                Brush("#FF1CA878");
+                Brush("#FF25C88C");
+
+            resources["AccentPressedBrush"] =
+                Brush("#FF107D58");
+
+            resources["AccentSoftBrush"] =
+                Brush("#FF123D2F");
+
+            resources["AccentTextBrush"] =
+                Brush("#FF66F0B9");
+
+            resources["SidebarBrush"] =
+                Brush("#FF08130E");
+
+            resources["SurfaceHoverBrush"] =
+                Brush("#FF1D392C");
         }
         else
         {
@@ -70,6 +85,21 @@ public static class ThemeManager
 
             resources["AccentHoverBrush"] =
                 Brush("#FF0F674E");
+
+            resources["AccentPressedBrush"] =
+                Brush("#FF0A513D");
+
+            resources["AccentSoftBrush"] =
+                Brush("#FFD6EFE4");
+
+            resources["AccentTextBrush"] =
+                Brush("#FF0C6D50");
+
+            resources["SidebarBrush"] =
+                Brush("#FFE7F0EB");
+
+            resources["SurfaceHoverBrush"] =
+                Brush("#FFDDECE4");
         }
     }
 
