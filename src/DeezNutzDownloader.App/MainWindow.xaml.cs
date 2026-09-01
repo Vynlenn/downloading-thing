@@ -97,39 +97,69 @@ public partial class MainWindow : Window
         RoutedEventArgs e)
     {
         LinksTextBox.Clear();
+        AnalysisResultsList.ItemsSource = null;
+
+        SetLinkAnalysisCounts(0, 0, 0);
 
         LinkGrabberStatusText.Text =
-            "The link-analysis engine has not been connected yet.";
+            "Paste links above to analyze them locally.";
 
         ApplicationStatusText.Text =
-            "Link input cleared — no network activity";
+            "Link input cleared - no network activity";
     }
 
     private void AnalyzeLinks_Click(
         object sender,
         RoutedEventArgs e)
     {
-        string[] links = LinksTextBox.Text
-            .Split(
-                new[] { '\r', '\n' },
-                StringSplitOptions.RemoveEmptyEntries |
-                StringSplitOptions.TrimEntries);
+        DeezNutzDownloader.Core.Links.LinkAnalysisResult result =
+            DeezNutzDownloader.Core.Links.LinkAnalyzer.Analyze(
+                LinksTextBox.Text);
 
-        if (links.Length == 0)
+        AnalysisResultsList.ItemsSource = result.Items;
+
+        SetLinkAnalysisCounts(
+            result.ValidCount,
+            result.DuplicateCount,
+            result.InvalidCount);
+
+        if (result.TotalCount == 0)
         {
             LinkGrabberStatusText.Text =
                 "Paste at least one address before analyzing.";
 
+            ApplicationStatusText.Text =
+                "Nothing to analyze - no network activity";
+
             return;
         }
 
+        string linkWord =
+            result.TotalCount == 1 ? "link" : "links";
+
         LinkGrabberStatusText.Text =
-            $"{links.Length} link(s) entered locally. " +
-            "No network request was made because the analysis " +
-            "engine is not installed yet.";
+            $"Analyzed {result.TotalCount} {linkWord} locally. " +
+            "No network requests were made.";
 
         ApplicationStatusText.Text =
-            $"{links.Length} link(s) captured locally";
+            $"Link analysis complete - {result.ValidCount} ready, " +
+            $"{result.DuplicateCount} duplicate, " +
+            $"{result.InvalidCount} invalid";
+    }
+
+    private void SetLinkAnalysisCounts(
+        int validCount,
+        int duplicateCount,
+        int invalidCount)
+    {
+        ValidLinksCountText.Text =
+            $"Valid  {validCount}";
+
+        DuplicateLinksCountText.Text =
+            $"Duplicates  {duplicateCount}";
+
+        InvalidLinksCountText.Text =
+            $"Invalid  {invalidCount}";
     }
 
     private void UseDefaultFolder_Click(

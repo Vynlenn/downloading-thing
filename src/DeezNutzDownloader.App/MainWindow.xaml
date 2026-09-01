@@ -185,7 +185,7 @@
                                 <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
 
-                            <TextBlock Text="Enter one address per line. Nothing is sent over the network at this checkpoint."
+                            <TextBlock Text="Enter one address per line. Links are validated locally; no network requests are made."
                                        Foreground="{DynamicResource MutedTextBrush}"
                                        TextWrapping="Wrap" />
 
@@ -211,24 +211,109 @@
                     </Border>
 
                     <Border Grid.Row="2"
-                            Padding="24"
+                            Padding="20"
                             CornerRadius="10"
                             Background="{DynamicResource SurfaceBrush}"
                             BorderBrush="{DynamicResource BorderBrush}"
                             BorderThickness="1">
-                        <StackPanel HorizontalAlignment="Center"
-                                    VerticalAlignment="Center">
-                            <TextBlock Text="No analyzed links"
-                                       FontSize="18"
-                                       FontWeight="SemiBold"
-                                       HorizontalAlignment="Center" />
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+
+                                <TextBlock Text="Analysis results"
+                                           FontSize="18"
+                                           FontWeight="SemiBold" />
+
+                                <StackPanel Grid.Column="1"
+                                            Orientation="Horizontal">
+                                    <TextBlock x:Name="ValidLinksCountText"
+                                               Text="Valid  0"
+                                               Foreground="{DynamicResource AccentTextBrush}"
+                                               FontWeight="SemiBold" />
+
+                                    <TextBlock x:Name="DuplicateLinksCountText"
+                                               Margin="18,0,0,0"
+                                               Text="Duplicates  0"
+                                               Foreground="{DynamicResource MutedTextBrush}"
+                                               FontWeight="SemiBold" />
+
+                                    <TextBlock x:Name="InvalidLinksCountText"
+                                               Margin="18,0,0,0"
+                                               Text="Invalid  0"
+                                               Foreground="{DynamicResource MutedTextBrush}"
+                                               FontWeight="SemiBold" />
+                                </StackPanel>
+                            </Grid>
+
                             <TextBlock x:Name="LinkGrabberStatusText"
-                                       Margin="0,7,0,0"
-                                       Text="The link-analysis engine has not been connected yet."
+                                       Grid.Row="1"
+                                       Margin="0,6,0,14"
+                                       Text="Paste links above to analyze them locally."
                                        Foreground="{DynamicResource MutedTextBrush}"
-                                       TextAlignment="Center"
                                        TextWrapping="Wrap" />
-                        </StackPanel>
+
+                            <ScrollViewer Grid.Row="2"
+                                          VerticalScrollBarVisibility="Auto">
+                                <ItemsControl x:Name="AnalysisResultsList">
+                                    <ItemsControl.ItemContainerStyle>
+                                        <Style TargetType="ContentPresenter">
+                                            <Setter Property="HorizontalAlignment"
+                                                    Value="Stretch" />
+                                        </Style>
+                                    </ItemsControl.ItemContainerStyle>
+
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Margin="0,0,0,8"
+                                                    Padding="12"
+                                                    CornerRadius="8"
+                                                    Background="{DynamicResource SurfaceSecondaryBrush}"
+                                                    BorderBrush="{DynamicResource BorderBrush}"
+                                                    BorderThickness="1">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="88" />
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+
+                                                    <TextBlock Text="{Binding Status}"
+                                                               Foreground="{DynamicResource AccentTextBrush}"
+                                                               FontWeight="SemiBold"
+                                                               VerticalAlignment="Top" />
+
+                                                    <StackPanel Grid.Column="1"
+                                                                Margin="10,0,16,0">
+                                                        <TextBlock Text="{Binding OriginalText}"
+                                                                   FontWeight="SemiBold"
+                                                                   TextWrapping="Wrap" />
+
+                                                        <TextBlock Margin="0,4,0,0"
+                                                                   Text="{Binding Detail}"
+                                                                   Foreground="{DynamicResource MutedTextBrush}"
+                                                                   TextWrapping="Wrap" />
+                                                    </StackPanel>
+
+                                                    <TextBlock Grid.Column="2"
+                                                               Text="{Binding LineLabel}"
+                                                               Foreground="{DynamicResource MutedTextBrush}"
+                                                               VerticalAlignment="Top" />
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+                        </Grid>
                     </Border>
                 </Grid>
 
