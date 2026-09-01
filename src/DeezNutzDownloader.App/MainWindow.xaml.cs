@@ -2,6 +2,8 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using DeezNutzDownloader.App.Theming;
+using DeezNutzDownloader.Core.Downloads;
+using DeezNutzDownloader.Core.Links;
 using DeezNutzDownloader.Core.Settings;
 using DeezNutzDownloader.Infrastructure.Configuration;
 using DeezNutzDownloader.Infrastructure.Logging;
@@ -14,6 +16,9 @@ public partial class MainWindow : Window
     private readonly SettingsStore _settingsStore;
     private readonly AppPaths _paths;
     private readonly LocalLog _log;
+    private readonly DownloadQueue _downloadQueue = new();
+
+    private LinkAnalysisResult? _lastLinkAnalysis;
 
     public MainWindow(
         AppSettings settings,
@@ -28,6 +33,7 @@ public partial class MainWindow : Window
 
         InitializeComponent();
         PopulateSettings();
+        RefreshDownloadQueue();
         ShowPage("Downloads");
     }
 
@@ -97,12 +103,9 @@ public partial class MainWindow : Window
         RoutedEventArgs e)
     {
         LinksTextBox.Clear();
-        AnalysisResultsList.ItemsSource = null;
 
-        SetLinkAnalysisCounts(0, 0, 0);
-
-        LinkGrabberStatusText.Text =
-            "Paste links above to analyze them locally.";
+        ResetLinkAnalysisPresentation(
+            "Paste links above to analyze them locally.");
 
         ApplicationStatusText.Text =
             "Link input cleared - no network activity";
@@ -112,16 +115,19 @@ public partial class MainWindow : Window
         object sender,
         RoutedEventArgs e)
     {
-        DeezNutzDownloader.Core.Links.LinkAnalysisResult result =
-            DeezNutzDownloader.Core.Links.LinkAnalyzer.Analyze(
-                LinksTextBox.Text);
+        LinkAnalysisResult result =
+            LinkAnalyzer.Analyze(LinksTextBox.Text);
 
+        _lastLinkAnalysis = result;
         AnalysisResultsList.ItemsSource = result.Items;
 
         SetLinkAnalysisCounts(
             result.ValidCount,
             result.DuplicateCount,
             result.InvalidCount);
+
+        QueueValidLinksButton.IsEnabled =
+            result.ValidCount > 0;
 
         if (result.TotalCount == 0)
         {
@@ -160,6 +166,131 @@ public partial class MainWindow : Window
 
         InvalidLinksCountText.Text =
             $"Invalid  {invalidCount}";
+    }
+
+    private void LinksTextBox_TextChanged(
+        object sender,
+        TextChangedEventArgs e)
+    {
+        if (!IsLoaded)
+        {
+            return;
+        }
+
+        string message = string.IsNullOrWhiteSpace(
+            LinksTextBox.Text)
+                ? "Paste links above to analyze them locally."
+                : "Input changed. Analyze the links to refresh the results.";
+
+        ResetLinkAnalysisPresentation(message);
+    }
+
+    private void ResetLinkAnalysisPresentation(
+        string message)
+    {
+        _lastLinkAnalysis = null;
+        AnalysisResultsList.ItemsSource = null;
+        QueueValidLinksButton.IsEnabled = false;
+
+        SetLinkAnalysisCounts(0, 0, 0);
+
+        LinkGrabberStatusText.Text = message;
+    }
+
+    private void QueueValidLinks_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        if (_lastLinkAnalysis is null)
+        {
+            QueueValidLinksButton.IsEnabled = false;
+
+            LinkGrabberStatusText.Text =
+                "Analyze the current input before adding it to the queue.";
+
+            return;
+        }
+
+        DownloadQueueImportResult result =
+            _downloadQueue.Enqueue(_lastLinkAnalysis);
+
+        RefreshDownloadQueue();
+
+        LinkGrabberStatusText.Text =
+            $"Queue updated: {result.AddedCount} added, " +
+            $"{result.AlreadyQueuedCount} already queued, " +
+            $"{result.IgnoredCount} invalid or duplicate.";
+
+        ApplicationStatusText.Text =
+            $"Local queue updated - {result.AddedCount} added, " +
+            $"{result.AlreadyQueuedCount} already queued; " +
+            "no network activity";
+
+        ShowPage("Downloads");
+    }
+
+    private void RemoveQueuedItem_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        if (
+            sender is not Button button ||
+            button.Tag is not Guid itemId
+        )
+        {
+            return;
+        }
+
+        if (!_downloadQueue.Remove(itemId))
+        {
+            return;
+        }
+
+        RefreshDownloadQueue();
+
+        ApplicationStatusText.Text =
+            $"Queue item removed - {_downloadQueue.Count} remaining; " +
+            "no network activity";
+    }
+
+    private void ClearDownloadQueue_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        int removedCount = _downloadQueue.Clear();
+
+        RefreshDownloadQueue();
+
+        ApplicationStatusText.Text =
+            $"Local queue cleared - {removedCount} removed; " +
+            "no network activity";
+    }
+
+    private void RefreshDownloadQueue()
+    {
+        int itemCount = _downloadQueue.Count;
+        bool hasItems = itemCount > 0;
+
+        DownloadQueueList.ItemsSource = null;
+        DownloadQueueList.ItemsSource =
+            _downloadQueue.Items.ToArray();
+
+        DownloadQueueEmptyState.Visibility =
+            hasItems
+                ? Visibility.Collapsed
+                : Visibility.Visible;
+
+        DownloadQueueContent.Visibility =
+            hasItems
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+
+        ClearDownloadQueueButton.IsEnabled = hasItems;
+
+        DownloadQueueCountText.Text =
+            itemCount == 1
+                ? "1 item"
+                : $"{itemCount} items";
     }
 
     private void UseDefaultFolder_Click(

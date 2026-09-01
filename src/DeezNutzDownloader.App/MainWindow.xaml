@@ -122,10 +122,25 @@
 
                         <StackPanel Grid.Column="1"
                                     Orientation="Horizontal">
+                            <TextBlock x:Name="DownloadQueueCountText"
+                                       Margin="0,0,18,0"
+                                       Text="0 items"
+                                       Foreground="{DynamicResource MutedTextBrush}"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+
+                            <Button x:Name="ClearDownloadQueueButton"
+                                    Content="Clear queue"
+                                    Margin="0,0,8,0"
+                                    IsEnabled="False"
+                                    Style="{StaticResource SecondaryButtonStyle}"
+                                    Click="ClearDownloadQueue_Click" />
+
                             <Button Content="Start all"
                                     Margin="0,0,8,0"
                                     IsEnabled="False"
                                     Style="{StaticResource PrimaryButtonStyle}" />
+
                             <Button Content="Pause all"
                                     IsEnabled="False"
                                     Style="{StaticResource SecondaryButtonStyle}" />
@@ -134,28 +149,108 @@
 
                     <Border Grid.Row="1"
                             Margin="0,18,0,0"
+                            Padding="20"
                             Background="{DynamicResource SurfaceBrush}"
                             BorderBrush="{DynamicResource BorderBrush}"
                             BorderThickness="1"
                             CornerRadius="10">
-                        <StackPanel HorizontalAlignment="Center"
-                                    VerticalAlignment="Center"
-                                    MaxWidth="500"
-                                    Margin="30">
-                            <TextBlock Text="No downloads yet"
-                                       HorizontalAlignment="Center"
-                                       FontSize="20"
-                                       FontWeight="SemiBold" />
-                            <TextBlock Margin="0,8,0,18"
-                                       Text="Add one or more links to begin. The actual download engine will be added in a later checkpoint."
-                                       TextAlignment="Center"
-                                       TextWrapping="Wrap"
-                                       Foreground="{DynamicResource MutedTextBrush}" />
-                            <Button Content="Open Link Grabber"
-                                    HorizontalAlignment="Center"
-                                    Style="{StaticResource PrimaryButtonStyle}"
-                                    Click="AddLinks_Click" />
-                        </StackPanel>
+                        <Grid>
+                            <StackPanel x:Name="DownloadQueueEmptyState"
+                                        HorizontalAlignment="Center"
+                                        VerticalAlignment="Center"
+                                        MaxWidth="500"
+                                        Margin="30">
+                                <TextBlock Text="No downloads yet"
+                                           HorizontalAlignment="Center"
+                                           FontSize="20"
+                                           FontWeight="SemiBold" />
+
+                                <TextBlock Margin="0,8,0,18"
+                                           Text="Analyze links and add the valid results to this local queue. No network requests are made at this checkpoint."
+                                           TextAlignment="Center"
+                                           TextWrapping="Wrap"
+                                           Foreground="{DynamicResource MutedTextBrush}" />
+
+                                <Button Content="Open Link Grabber"
+                                        HorizontalAlignment="Center"
+                                        Style="{StaticResource PrimaryButtonStyle}"
+                                        Click="AddLinks_Click" />
+                            </StackPanel>
+
+                            <Grid x:Name="DownloadQueueContent"
+                                  Visibility="Collapsed">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="*" />
+                                </Grid.RowDefinitions>
+
+                                <TextBlock Text="Items are queued locally. The download engine is not connected yet."
+                                           Foreground="{DynamicResource MutedTextBrush}"
+                                           TextWrapping="Wrap" />
+
+                                <ScrollViewer Grid.Row="1"
+                                              Margin="0,14,0,0"
+                                              VerticalScrollBarVisibility="Auto">
+                                    <ItemsControl x:Name="DownloadQueueList">
+                                        <ItemsControl.ItemContainerStyle>
+                                            <Style TargetType="ContentPresenter">
+                                                <Setter Property="HorizontalAlignment"
+                                                        Value="Stretch" />
+                                            </Style>
+                                        </ItemsControl.ItemContainerStyle>
+
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Margin="0,0,0,9"
+                                                        Padding="14"
+                                                        CornerRadius="9"
+                                                        Background="{DynamicResource SurfaceSecondaryBrush}"
+                                                        BorderBrush="{DynamicResource BorderBrush}"
+                                                        BorderThickness="1">
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*" />
+                                                            <ColumnDefinition Width="Auto" />
+                                                        </Grid.ColumnDefinitions>
+
+                                                        <StackPanel>
+                                                            <TextBlock Text="{Binding DisplayName}"
+                                                                       FontWeight="SemiBold"
+                                                                       FontSize="15"
+                                                                       TextWrapping="Wrap" />
+
+                                                            <TextBlock Margin="0,5,0,0"
+                                                                       Text="{Binding Url}"
+                                                                       Foreground="{DynamicResource MutedTextBrush}"
+                                                                       TextWrapping="Wrap" />
+                                                        </StackPanel>
+
+                                                        <StackPanel Grid.Column="1"
+                                                                    Margin="18,0,0,0"
+                                                                    Orientation="Horizontal"
+                                                                    VerticalAlignment="Center">
+                                                            <Border Margin="0,0,10,0"
+                                                                    Padding="10,5"
+                                                                    CornerRadius="8"
+                                                                    Background="{DynamicResource AccentSoftBrush}">
+                                                                <TextBlock Text="{Binding Status}"
+                                                                           Foreground="{DynamicResource AccentTextBrush}"
+                                                                           FontWeight="SemiBold" />
+                                                            </Border>
+
+                                                            <Button Content="Remove"
+                                                                    Tag="{Binding Id}"
+                                                                    Style="{StaticResource SecondaryButtonStyle}"
+                                                                    Click="RemoveQueuedItem_Click" />
+                                                        </StackPanel>
+                                                    </Grid>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+                            </Grid>
+                        </Grid>
                     </Border>
                 </Grid>
 
@@ -194,7 +289,8 @@
                                      Margin="0,12,0,12"
                                      AcceptsReturn="True"
                                      VerticalScrollBarVisibility="Auto"
-                                     TextWrapping="NoWrap" />
+                                     TextWrapping="NoWrap"
+                                     TextChanged="LinksTextBox_TextChanged" />
 
                             <StackPanel Grid.Row="2"
                                         Orientation="Horizontal"
@@ -204,8 +300,15 @@
                                         Style="{StaticResource SecondaryButtonStyle}"
                                         Click="ClearLinks_Click" />
                                 <Button Content="Analyze links"
-                                        Style="{StaticResource PrimaryButtonStyle}"
+                                        Margin="0,0,8,0"
+                                        Style="{StaticResource SecondaryButtonStyle}"
                                         Click="AnalyzeLinks_Click" />
+
+                                <Button x:Name="QueueValidLinksButton"
+                                        Content="Add valid to queue"
+                                        IsEnabled="False"
+                                        Style="{StaticResource PrimaryButtonStyle}"
+                                        Click="QueueValidLinks_Click" />
                             </StackPanel>
                         </Grid>
                     </Border>
