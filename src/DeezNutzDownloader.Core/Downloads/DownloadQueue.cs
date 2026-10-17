@@ -21,7 +21,10 @@ public sealed record DownloadQueueItem(
     long? TotalBytes = null,
     string? DestinationPath = null,
     string? SavedFileName = null,
-    string? ErrorMessage = null)
+    string? ErrorMessage = null,
+    long? SpeedBytesPerSecond = null,
+    string? PackageName = null,
+    string? RelativeFolder = null)
 {
     public string Status => State.ToString();
 
@@ -29,6 +32,11 @@ public sealed record DownloadQueueItem(
         State == DownloadQueueItemState.Downloading;
 
     public bool CanRemove => !IsActive;
+
+    public bool CanRetry =>
+        State is
+            DownloadQueueItemState.Failed or
+            DownloadQueueItemState.Canceled;
 
     public bool IsIndeterminate =>
         State == DownloadQueueItemState.Downloading &&
@@ -67,6 +75,37 @@ public sealed record DownloadQueueItem(
         }
     }
 
+    public string? EstimatedRemainingText
+    {
+        get
+        {
+            if (
+                State !=
+                    DownloadQueueItemState.Downloading ||
+                SpeedBytesPerSecond is not > 0 ||
+                TotalBytes is not long totalBytes
+            )
+            {
+                return null;
+            }
+
+            long remainingBytes =
+                Math.Max(0, totalBytes - BytesReceived);
+
+            if (remainingBytes == 0)
+            {
+                return "finishing…";
+            }
+
+            double remainingSeconds =
+                remainingBytes /
+                (double)SpeedBytesPerSecond;
+
+            return FormatDuration(remainingSeconds) +
+                " left";
+        }
+    }
+
     public string ProgressText =>
         State switch
         {
@@ -77,10 +116,13 @@ public sealed record DownloadQueueItem(
                 when TotalBytes is long totalBytes =>
                 $"{FormatBytes(BytesReceived)} of " +
                 $"{FormatBytes(totalBytes)} · " +
-                $"{ProgressPercentage:0.0}%",
+                $"{ProgressPercentage:0.0}%" +
+                FormatSpeedSuffix() +
+                FormatEtaSuffix(),
 
             DownloadQueueItemState.Downloading =>
-                $"{FormatBytes(BytesReceived)} downloaded",
+                $"{FormatBytes(BytesReceived)} downloaded" +
+                FormatSpeedSuffix(),
 
             DownloadQueueItemState.Completed =>
                 $"Saved as {EffectiveDisplayName} · " +
@@ -99,6 +141,55 @@ public sealed record DownloadQueueItem(
             _ =>
                 string.Empty
         };
+
+    private string FormatSpeedSuffix()
+    {
+        return SpeedBytesPerSecond is > 0
+            ? $" · {FormatBytes(SpeedBytesPerSecond.Value)}/s"
+            : string.Empty;
+    }
+
+    private string FormatEtaSuffix()
+    {
+        return EstimatedRemainingText is string eta
+            ? $" · {eta}"
+            : string.Empty;
+    }
+
+    private static string FormatDuration(
+        double totalSeconds)
+    {
+        if (double.IsNaN(totalSeconds) ||
+            double.IsInfinity(totalSeconds))
+        {
+            return "calculating…";
+        }
+
+        long seconds =
+            Math.Max(0, (long)Math.Ceiling(totalSeconds));
+
+        if (seconds < 60)
+        {
+            return $"{seconds}s";
+        }
+
+        long minutes = seconds / 60;
+        long leftoverSeconds = seconds % 60;
+
+        if (minutes < 60)
+        {
+            return leftoverSeconds == 0
+                ? $"{minutes}m"
+                : $"{minutes}m {leftoverSeconds}s";
+        }
+
+        long hours = minutes / 60;
+        long leftoverMinutes = minutes % 60;
+
+        return leftoverMinutes == 0
+            ? $"{hours}h"
+            : $"{hours}h {leftoverMinutes}m";
+    }
 
     private static string FormatBytes(long byteCount)
     {
@@ -141,6 +232,9 @@ public sealed class DownloadQueue
 
     private readonly HashSet<string> _queuedUrls =
         new(StringComparer.Ordinal);
+
+    private readonly Dictionary<Guid, SpeedSample>
+        _speedSamples = new();
 
     public event EventHandler? Changed;
 
@@ -210,9 +304,86 @@ public sealed class DownloadQueue
                     new DownloadQueueItem(
                         Guid.NewGuid(),
                         normalizedUrl,
-                        GetDisplayName(normalizedUri)));
+                        GetDisplayName(normalizedUri),
+                        PackageName: normalizedUri.Host
+                            .ToLowerInvariant()));
 
                 addedCount++;
+            }
+
+            result = new DownloadQueueImportResult(
+                addedCount,
+                alreadyQueuedCount,
+                ignoredCount);
+        }
+
+        if (result.AddedCount > 0)
+        {
+            OnChanged();
+        }
+
+        return result;
+    }
+
+    public DownloadQueueImportResult EnqueuePackages(
+        IReadOnlyList<LinkPackage> packages,
+        bool organizeIntoSiteFolders)
+    {
+        ArgumentNullException.ThrowIfNull(packages);
+
+        DownloadQueueImportResult result;
+
+        lock (_sync)
+        {
+            int addedCount = 0;
+            int alreadyQueuedCount = 0;
+            int ignoredCount = 0;
+
+            foreach (LinkPackage package in packages)
+            {
+                string? folder =
+                    organizeIntoSiteFolders
+                        ? PackageFolderNames.Sanitize(
+                            package.Name)
+                        : null;
+
+                foreach (
+                    LinkAnalysisItem candidate in package.Links
+                )
+                {
+                    if (
+                        candidate.Status !=
+                            LinkAnalysisStatus.Valid ||
+                        string.IsNullOrWhiteSpace(
+                            candidate.NormalizedUrl) ||
+                        !TryCreateSupportedUri(
+                            candidate.NormalizedUrl,
+                            out Uri normalizedUri)
+                    )
+                    {
+                        ignoredCount++;
+                        continue;
+                    }
+
+                    string normalizedUrl =
+                        candidate.NormalizedUrl;
+
+                    if (!_queuedUrls.Add(normalizedUrl))
+                    {
+                        alreadyQueuedCount++;
+                        continue;
+                    }
+
+                    _items.Add(
+                        new DownloadQueueItem(
+                            Guid.NewGuid(),
+                            normalizedUrl,
+                            GetDisplayName(normalizedUri),
+                            PackageName: package.Name,
+                            RelativeFolder: folder));
+
+                    addedCount++;
+                }
             }
 
             result = new DownloadQueueImportResult(
@@ -333,8 +504,15 @@ public sealed class DownloadQueue
                 TotalBytes = null,
                 DestinationPath = null,
                 SavedFileName = null,
-                ErrorMessage = null
+                ErrorMessage = null,
+                SpeedBytesPerSecond = null
             };
+
+            _speedSamples[current.Id] =
+                new SpeedSample(
+                    0,
+                    DateTimeOffset.UtcNow,
+                    0d);
 
             changed = true;
         }
@@ -388,15 +566,24 @@ public sealed class DownloadQueue
             long? totalBytes =
                 reportedTotal ?? current.TotalBytes;
 
+            long? speedBytesPerSecond =
+                UpdateSpeedSample(
+                    current.Id,
+                    bytesReceived);
+
             if (
                 bytesReceived != current.BytesReceived ||
-                totalBytes != current.TotalBytes
+                totalBytes != current.TotalBytes ||
+                speedBytesPerSecond !=
+                    current.SpeedBytesPerSecond
             )
             {
                 _items[index] = current with
                 {
                     BytesReceived = bytesReceived,
-                    TotalBytes = totalBytes
+                    TotalBytes = totalBytes,
+                    SpeedBytesPerSecond =
+                        speedBytesPerSecond
                 };
 
                 changed = true;
@@ -452,8 +639,11 @@ public sealed class DownloadQueue
                 DestinationPath =
                     result.DestinationPath,
                 SavedFileName = result.FileName,
-                ErrorMessage = null
+                ErrorMessage = null,
+                SpeedBytesPerSecond = null
             };
+
+            _speedSamples.Remove(current.Id);
 
             changed = true;
         }
@@ -494,8 +684,11 @@ public sealed class DownloadQueue
                 DestinationPath = null,
                 SavedFileName = null,
                 ErrorMessage =
-                    NormalizeErrorMessage(errorMessage)
+                    NormalizeErrorMessage(errorMessage),
+                SpeedBytesPerSecond = null
             };
+
+            _speedSamples.Remove(current.Id);
 
             changed = true;
         }
@@ -534,8 +727,11 @@ public sealed class DownloadQueue
                     DownloadQueueItemState.Canceled,
                 DestinationPath = null,
                 SavedFileName = null,
-                ErrorMessage = null
+                ErrorMessage = null,
+                SpeedBytesPerSecond = null
             };
+
+            _speedSamples.Remove(current.Id);
 
             changed = true;
         }
@@ -546,6 +742,274 @@ public sealed class DownloadQueue
         }
 
         return true;
+    }
+
+    public bool TryResetForRetry(Guid itemId)
+    {
+        bool reset;
+
+        lock (_sync)
+        {
+            int index = _items.FindIndex(
+                item => item.Id == itemId);
+
+            if (
+                index < 0 ||
+                !CanRetryState(_items[index].State)
+            )
+            {
+                return false;
+            }
+
+            DownloadQueueItem current = _items[index];
+
+            _items[index] = current with
+            {
+                State = DownloadQueueItemState.Queued,
+                BytesReceived = 0,
+                TotalBytes = null,
+                DestinationPath = null,
+                SavedFileName = null,
+                ErrorMessage = null,
+                SpeedBytesPerSecond = null
+            };
+
+            _speedSamples.Remove(current.Id);
+
+            reset = true;
+        }
+
+        if (reset)
+        {
+            OnChanged();
+        }
+
+        return true;
+    }
+
+    public int ClearCompleted()
+    {
+        int removedCount;
+
+        lock (_sync)
+        {
+            if (
+                _items.Any(
+                    item =>
+                        item.State ==
+                        DownloadQueueItemState.Downloading)
+            )
+            {
+                return 0;
+            }
+
+            int beforeCount = _items.Count;
+
+            _items.RemoveAll(
+                item =>
+                    item.State is
+                        DownloadQueueItemState.Completed or
+                        DownloadQueueItemState.Failed or
+                        DownloadQueueItemState.Canceled);
+
+            removedCount = beforeCount - _items.Count;
+
+            if (removedCount == 0)
+            {
+                return 0;
+            }
+
+            RebuildUrlIndexLocked();
+            _speedSamples.Clear();
+        }
+
+        OnChanged();
+
+        return removedCount;
+    }
+
+    public void RestoreSnapshot(
+        IReadOnlyList<DownloadQueueItem> snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+
+        lock (_sync)
+        {
+            _items.Clear();
+            _queuedUrls.Clear();
+            _speedSamples.Clear();
+
+            foreach (DownloadQueueItem persisted in snapshot)
+            {
+                if (
+                    string.IsNullOrWhiteSpace(persisted.Url) ||
+                    !TryCreateSupportedUri(
+                        persisted.Url,
+                        out Uri normalizedUri)
+                )
+                {
+                    continue;
+                }
+
+                string normalizedUrl = persisted.Url.Trim();
+
+                if (!_queuedUrls.Add(normalizedUrl))
+                {
+                    continue;
+                }
+
+                DownloadQueueItemState state = persisted.State;
+
+                if (
+                    state is DownloadQueueItemState.Downloading ||
+                    !Enum.IsDefined(state)
+                )
+                {
+                    state = DownloadQueueItemState.Queued;
+                }
+
+                string displayName =
+                    string.IsNullOrWhiteSpace(
+                        persisted.DisplayName)
+                        ? GetDisplayName(normalizedUri)
+                        : persisted.DisplayName;
+
+                _items.Add(
+                    new DownloadQueueItem(
+                        persisted.Id == Guid.Empty
+                            ? Guid.NewGuid()
+                            : persisted.Id,
+                        normalizedUrl,
+                        displayName,
+                        state,
+                        state == DownloadQueueItemState.Queued
+                            ? 0
+                            : Math.Max(0, persisted.BytesReceived),
+                        state == DownloadQueueItemState.Queued
+                            ? null
+                            : NormalizeTotalBytes(
+                                persisted.TotalBytes),
+                        state
+                            is DownloadQueueItemState.Completed
+                            ? persisted.DestinationPath
+                            : null,
+                        state
+                            is DownloadQueueItemState.Completed
+                            ? persisted.SavedFileName
+                            : null,
+                        state is DownloadQueueItemState.Failed
+                            ? NormalizeErrorMessage(
+                                persisted.ErrorMessage)
+                            : null,
+                        null,
+                        string.IsNullOrWhiteSpace(
+                            persisted.PackageName)
+                            ? null
+                            : persisted.PackageName.Trim(),
+                        PackageFolderNames.IsSafeSegment(
+                            persisted.RelativeFolder)
+                            ? persisted.RelativeFolder
+                            : null));
+            }
+        }
+
+        OnChanged();
+    }
+
+    private static bool CanRetryState(
+        DownloadQueueItemState state)
+    {
+        return state is
+            DownloadQueueItemState.Failed or
+            DownloadQueueItemState.Canceled;
+    }
+
+    private static long? NormalizeTotalBytes(
+        long? totalBytes)
+    {
+        return totalBytes is < 0 ? null : totalBytes;
+    }
+
+    private void RebuildUrlIndexLocked()
+    {
+        _queuedUrls.Clear();
+
+        foreach (DownloadQueueItem item in _items)
+        {
+            _queuedUrls.Add(item.Url);
+        }
+    }
+
+    private long? UpdateSpeedSample(
+        Guid itemId,
+        long bytesReceived)
+    {
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+
+        if (!_speedSamples.TryGetValue(
+                itemId,
+                out SpeedSample? sample))
+        {
+            _speedSamples[itemId] =
+                new SpeedSample(
+                    bytesReceived,
+                    now,
+                    0d);
+
+            return null;
+        }
+
+        double elapsedSeconds =
+            (now - sample.LastSeen).TotalSeconds;
+
+        long byteDelta =
+            bytesReceived - sample.LastBytes;
+
+        if (elapsedSeconds < 0.05 || byteDelta <= 0)
+        {
+            return sample.SmoothedBytesPerSecond > 0
+                ? (long)sample.SmoothedBytesPerSecond
+                : null;
+        }
+
+        double instantSpeed =
+            byteDelta / elapsedSeconds;
+
+        double smoothed =
+            sample.SmoothedBytesPerSecond <= 0
+                ? instantSpeed
+                : sample.SmoothedBytesPerSecond * 0.7 +
+                    instantSpeed * 0.3;
+
+        _speedSamples[itemId] =
+            new SpeedSample(
+                bytesReceived,
+                now,
+                smoothed);
+
+        return smoothed > 0
+            ? (long)smoothed
+            : null;
+    }
+
+    private sealed class SpeedSample
+    {
+        public SpeedSample(
+            long lastBytes,
+            DateTimeOffset lastSeen,
+            double smoothedBytesPerSecond)
+        {
+            LastBytes = lastBytes;
+            LastSeen = lastSeen;
+            SmoothedBytesPerSecond =
+                smoothedBytesPerSecond;
+        }
+
+        public long LastBytes { get; }
+
+        public DateTimeOffset LastSeen { get; }
+
+        public double SmoothedBytesPerSecond { get; }
     }
 
     private static bool IsStartable(

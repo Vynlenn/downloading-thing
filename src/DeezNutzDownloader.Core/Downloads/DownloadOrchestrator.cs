@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+
 namespace DeezNutzDownloader.Core.Downloads;
 
 public sealed record DownloadBatchResult(
@@ -17,6 +19,8 @@ public sealed class DownloadOrchestrator : IDisposable
     private readonly IDownloadTransferService _transferService;
 
     private CancellationTokenSource? _runCancellation;
+    private readonly ConcurrentDictionary<string, SemaphoreSlim>
+        _hostGates = new(StringComparer.OrdinalIgnoreCase);
     private bool _disposed;
 
     public DownloadOrchestrator(
@@ -239,19 +243,42 @@ public sealed class DownloadOrchestrator : IDisposable
             DownloadQueueItem item =
                 selectedItems[itemIndex];
 
+            // Free file hosts (Pixeldrain, Gofile, MEGA, …)
+            // throttle per IP: one active transfer per host.
+            SemaphoreSlim? hostGate = GetHostGate(item.Url);
+
+            if (hostGate is not null)
+            {
+                try
+                {
+                    await hostGate.WaitAsync(cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+            }
+
             if (!_queue.TryMarkDownloading(item.Id))
             {
+                hostGate?.Release();
                 continue;
             }
 
             Interlocked.Increment(
                 ref state.StartedCount);
 
+            string itemDirectory =
+                ResolveItemDirectory(
+                    destinationDirectory,
+                    item.RelativeFolder);
+
             try
             {
                 var request = new DownloadTransferRequest(
                     new Uri(item.Url, UriKind.Absolute),
-                    destinationDirectory);
+                    itemDirectory);
 
                 var progress =
                     new InlineProgress<
@@ -294,7 +321,30 @@ public sealed class DownloadOrchestrator : IDisposable
                 Interlocked.Increment(
                     ref state.FailedCount);
             }
+
+            hostGate?.Release();
         }
+    }
+
+    private SemaphoreSlim? GetHostGate(string url)
+    {
+        string? host = TryGetHost(url);
+
+        if (!HostThrottlePolicy.IsSingleLaneHost(host))
+        {
+            return null;
+        }
+
+        return _hostGates.GetOrAdd(
+            host!,
+            _ => new SemaphoreSlim(1, 1));
+    }
+
+    private static string? TryGetHost(string url)
+    {
+        return Uri.TryCreate(url, UriKind.Absolute, out Uri? uri)
+            ? uri.Host
+            : null;
     }
 
     private static string ValidateDestinationDirectory(
@@ -324,6 +374,54 @@ public sealed class DownloadOrchestrator : IDisposable
                 nameof(destinationDirectory),
                 exception);
         }
+    }
+
+    private static string ResolveItemDirectory(
+        string destinationDirectory,
+        string? relativeFolder)
+    {
+        if (string.IsNullOrWhiteSpace(relativeFolder))
+        {
+            return destinationDirectory;
+        }
+
+        try
+        {
+            string combined =
+                Path.GetFullPath(
+                    Path.Combine(
+                        destinationDirectory,
+                        relativeFolder));
+
+            string root =
+                destinationDirectory.EndsWith(
+                    Path.DirectorySeparatorChar)
+                    ? destinationDirectory
+                    : destinationDirectory +
+                        Path.DirectorySeparatorChar;
+
+            if (
+                combined.Equals(
+                    destinationDirectory,
+                    StringComparison.OrdinalIgnoreCase) ||
+                combined.StartsWith(
+                    root,
+                    StringComparison.OrdinalIgnoreCase)
+            )
+            {
+                return combined;
+            }
+        }
+        catch (Exception exception)
+            when (
+                exception is ArgumentException or
+                NotSupportedException or
+                PathTooLongException
+            )
+        {
+        }
+
+        return destinationDirectory;
     }
 
     private static string GetFailureMessage(

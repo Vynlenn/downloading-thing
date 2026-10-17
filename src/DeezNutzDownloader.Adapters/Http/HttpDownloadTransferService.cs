@@ -63,32 +63,6 @@ public sealed class HttpDownloadTransferService
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        using var httpRequest =
-            new HttpRequestMessage(HttpMethod.Get, source);
-
-        using HttpResponseMessage response =
-            await _httpClient.SendAsync(
-                    httpRequest,
-                    HttpCompletionOption.ResponseHeadersRead,
-                    cancellationToken)
-                .ConfigureAwait(false);
-
-        response.EnsureSuccessStatusCode();
-
-        HttpContent content =
-            response.Content ??
-            throw new HttpRequestException(
-                "The HTTP response did not contain a body.");
-
-        Uri fileNameSource =
-            response.RequestMessage?.RequestUri is
-                { IsAbsoluteUri: true } responseUri
-                ? responseUri
-                : source;
-
-        string fileName =
-            ResolveSafeFileName(content.Headers, fileNameSource);
-
         Directory.CreateDirectory(destinationDirectory);
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -97,96 +71,289 @@ public sealed class HttpDownloadTransferService
             FileStream temporaryStream
         ) = CreateTemporaryFile(destinationDirectory);
 
+        // The creation stream only reserves a unique name.
+        temporaryStream.Dispose();
+
+        // The temp file is kept across throttle retries so a
+        // 429/503 wait can resume instead of restarting. It is
+        // deleted only on terminal failure (see catch below).
+        // A `continue` never triggers that cleanup.
         string? pendingTemporaryPath = temporaryPath;
         long bytesWritten = 0;
-        long? totalBytes = content.Headers.ContentLength;
+        long? totalBytes = null;
+        string? fileName = null;
 
         try
         {
-            await using (temporaryStream)
+            for (int attempt = 1; ; attempt++)
             {
-                await using Stream sourceStream =
-                    await content.ReadAsStreamAsync(
+                cancellationToken.ThrowIfCancellationRequested();
+
+                using var httpRequest =
+                    new HttpRequestMessage(HttpMethod.Get, source);
+
+                if (bytesWritten > 0)
+                {
+                    httpRequest.Headers.Range =
+                        new RangeHeaderValue(bytesWritten, null);
+                }
+
+                using HttpResponseMessage response =
+                    await _httpClient.SendAsync(
+                            httpRequest,
+                            HttpCompletionOption.ResponseHeadersRead,
                             cancellationToken)
                         .ConfigureAwait(false);
 
-                progress?.Report(
-                    new DownloadTransferProgress(
-                        bytesWritten,
-                        totalBytes));
+                if (
+                    HostThrottlePolicy.IsThrottleStatusCode(
+                        response.StatusCode)
+                )
+                {
+                    TimeSpan? retryAfter =
+                        HostThrottlePolicy.TryParseRetryAfter(
+                            response.Headers,
+                            DateTimeOffset.UtcNow);
+
+                    TimeSpan? wait =
+                        HostThrottlePolicy.ComputeWaitBeforeRetry(
+                            attempt,
+                            retryAfter);
+
+                    if (
+                        !HostThrottlePolicy.ShouldRetryAttempt(
+                            response.StatusCode,
+                            attempt) ||
+                        wait is null
+                    )
+                    {
+                        throw new HostThrottledException(
+                            source.Host,
+                            HostThrottlePolicy.FriendlyMessage(
+                                source.Host,
+                                response.StatusCode,
+                                retryAfter));
+                    }
+
+                    progress?.Report(
+                        new DownloadTransferProgress(
+                            bytesWritten,
+                            totalBytes));
+
+                    await Task.Delay(wait.Value, cancellationToken)
+                        .ConfigureAwait(false);
+
+                    continue;
+                }
+
+                if (
+                    response.StatusCode ==
+                        System.Net.HttpStatusCode.Forbidden &&
+                    HostThrottlePolicy.IsSingleLaneHost(source.Host)
+                )
+                {
+                    throw new HostThrottledException(
+                        source.Host,
+                        HostThrottlePolicy.FriendlyMessage(
+                            source.Host,
+                            response.StatusCode,
+                            retryAfter: null,
+                            isPixeldrainQuotaBody: true),
+                        isQuotaExhausted: true);
+                }
+
+                if (
+                    response.StatusCode ==
+                        System.Net.HttpStatusCode
+                            .RequestedRangeNotSatisfiable
+                )
+                {
+                    // Our resume offset is stale (the file
+                    // changed server-side). Restart once.
+                    bytesWritten = 0;
+                    totalBytes = null;
+                    TruncateFile(temporaryPath);
+
+                    if (attempt >= 4)
+                    {
+                        response.EnsureSuccessStatusCode();
+                    }
+
+                    continue;
+                }
+
+                response.EnsureSuccessStatusCode();
+
+                HttpContent content =
+                    response.Content ??
+                    throw new HttpRequestException(
+                        "The HTTP response did not contain a body.");
+
+                bool isPartial =
+                    response.StatusCode ==
+                        System.Net.HttpStatusCode.PartialContent;
+
+                if (isPartial && bytesWritten > 0)
+                {
+                    totalBytes ??=
+                        DeriveTotalBytes(
+                            content.Headers,
+                            bytesWritten);
+                }
+                else
+                {
+                    if (bytesWritten > 0)
+                    {
+                        // The server ignored our Range header.
+                        // Restart cleanly instead of splicing.
+                        bytesWritten = 0;
+                        TruncateFile(temporaryPath);
+                    }
+
+                    totalBytes = content.Headers.ContentLength;
+                }
+
+                if (fileName is null)
+                {
+                    Uri fileNameSource =
+                        response.RequestMessage?.RequestUri is
+                            { IsAbsoluteUri: true } responseUri
+                            ? responseUri
+                            : source;
+
+                    fileName =
+                        ResolveSafeFileName(
+                            content.Headers,
+                            fileNameSource);
+                }
 
                 byte[] buffer =
                     ArrayPool<byte>.Shared.Rent(BufferSize);
 
                 try
                 {
-                    while (true)
-                    {
-                        int bytesRead =
-                            await sourceStream.ReadAsync(
-                                    buffer.AsMemory(
-                                        0,
-                                        BufferSize),
-                                    cancellationToken)
-                                .ConfigureAwait(false);
-
-                        if (bytesRead == 0)
-                        {
-                            break;
-                        }
-
-                        await temporaryStream.WriteAsync(
-                                buffer.AsMemory(
-                                    0,
-                                    bytesRead),
+                    await using Stream sourceStream =
+                        await content.ReadAsStreamAsync(
                                 cancellationToken)
                             .ConfigureAwait(false);
 
-                        checked
+                    progress?.Report(
+                        new DownloadTransferProgress(
+                            bytesWritten,
+                            totalBytes));
+
+                    await using (
+                        var resumeStream = new FileStream(
+                            temporaryPath,
+                            FileMode.Open,
+                            FileAccess.Write,
+                            FileShare.None,
+                            BufferSize,
+                            FileOptions.Asynchronous |
+                                FileOptions.SequentialScan))
+                    {
+                        resumeStream.Seek(
+                            bytesWritten,
+                            SeekOrigin.Begin);
+
+                        while (true)
                         {
-                            bytesWritten += bytesRead;
+                            int bytesRead =
+                                await sourceStream.ReadAsync(
+                                        buffer.AsMemory(
+                                            0,
+                                            BufferSize),
+                                        cancellationToken)
+                                    .ConfigureAwait(false);
+
+                            if (bytesRead == 0)
+                            {
+                                break;
+                            }
+
+                            await resumeStream.WriteAsync(
+                                    buffer.AsMemory(
+                                        0,
+                                        bytesRead),
+                                    cancellationToken)
+                                .ConfigureAwait(false);
+
+                            checked
+                            {
+                                bytesWritten += bytesRead;
+                            }
+
+                            progress?.Report(
+                                new DownloadTransferProgress(
+                                    bytesWritten,
+                                    totalBytes));
                         }
 
-                        progress?.Report(
-                            new DownloadTransferProgress(
-                                bytesWritten,
-                                totalBytes));
+                        await resumeStream.FlushAsync(
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+                }
+                catch (Exception exception)
+                    when (
+                        exception is HttpRequestException or
+                            IOException &&
+                        attempt < 4)
+                {
+                    // Keep the partial file; the next attempt
+                    // resumes via the Range header above.
+                    progress?.Report(
+                        new DownloadTransferProgress(
+                            bytesWritten,
+                            totalBytes));
+
+                    TimeSpan? wait =
+                        HostThrottlePolicy.ComputeWaitBeforeRetry(
+                            attempt,
+                            retryAfter: null);
+
+                    if (wait.HasValue)
+                    {
+                        await Task.Delay(
+                                wait.Value,
+                                cancellationToken)
+                            .ConfigureAwait(false);
                     }
 
-                    await temporaryStream.FlushAsync(
-                            cancellationToken)
-                        .ConfigureAwait(false);
+                    continue;
                 }
                 finally
                 {
                     ArrayPool<byte>.Shared.Return(buffer);
                 }
+
+                cancellationToken.ThrowIfCancellationRequested();
+
+                string destinationPath =
+                    MoveToAvailableDestination(
+                        temporaryPath,
+                        destinationDirectory,
+                        fileName!);
+
+                pendingTemporaryPath = null;
+
+                return new DownloadTransferResult(
+                    source,
+                    destinationPath,
+                    Path.GetFileName(destinationPath),
+                    bytesWritten,
+                    totalBytes);
             }
-
-            cancellationToken.ThrowIfCancellationRequested();
-
-            string destinationPath =
-                MoveToAvailableDestination(
-                    temporaryPath,
-                    destinationDirectory,
-                    fileName);
-
-            pendingTemporaryPath = null;
-
-            return new DownloadTransferResult(
-                source,
-                destinationPath,
-                Path.GetFileName(destinationPath),
-                bytesWritten,
-                totalBytes);
         }
-        finally
+        catch
         {
             if (pendingTemporaryPath is not null)
             {
                 TryDeleteTemporaryFile(
                     pendingTemporaryPath);
             }
+
+            throw;
         }
     }
 
@@ -663,6 +830,35 @@ public sealed class HttpDownloadTransferService
         }
 
         return stem + extension;
+    }
+
+    private static long? DeriveTotalBytes(
+        HttpContentHeaders contentHeaders,
+        long resumeOffset)
+    {
+        // A 206 response carries the full length in
+        // Content-Range (bytes s-e/total); otherwise the
+        // remaining Content-Length plus what we already hold.
+        if (contentHeaders.ContentRange?.Length is long total)
+        {
+            return total;
+        }
+
+        if (contentHeaders.ContentLength is long remaining)
+        {
+            return checked(resumeOffset + remaining);
+        }
+
+        return null;
+    }
+
+    private static void TruncateFile(string path)
+    {
+        using var stream = new FileStream(
+            path,
+            FileMode.Truncate,
+            FileAccess.Write,
+            FileShare.None);
     }
 
     private static void TryDeleteTemporaryFile(

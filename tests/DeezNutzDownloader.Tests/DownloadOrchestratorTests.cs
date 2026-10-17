@@ -512,6 +512,98 @@ public sealed class DownloadOrchestratorTests
         Assert.Empty(queue.Items);
     }
 
+    [Fact]
+    public async Task StartAllAsync_RoutesItemsIntoPackageFolders()
+    {
+        DownloadQueue queue = CreateQueue(
+            "https://example.test/first.bin",
+            "https://other.test/second.bin");
+
+        queue.RestoreSnapshot(
+            queue.Items.Select(
+                item => item with
+                {
+                    RelativeFolder = "example.test"
+                }).ToArray());
+
+        var destinations =
+            new System.Collections.Concurrent.ConcurrentBag<string>();
+
+        var service = new DelegateTransferService(
+            (request, progress, cancellationToken) =>
+            {
+                destinations.Add(request.DestinationDirectory);
+
+                return Task.FromResult(
+                    CreateResult(
+                        request,
+                        bytesWritten: 10));
+            });
+
+        using var orchestrator =
+            new DownloadOrchestrator(
+                queue,
+                service);
+
+        string destination = CreateDestinationPath();
+
+        DownloadBatchResult result =
+            await orchestrator.StartAllAsync(
+                destination,
+                maximumConcurrency: 2);
+
+        Assert.Equal(2, result.CompletedCount);
+        Assert.All(
+            destinations,
+            directory =>
+                Assert.Equal(
+                    Path.Combine(destination, "example.test"),
+                    directory));
+    }
+
+    [Fact]
+    public async Task StartAllAsync_FallsBackToRootForUnsafePackageFolders()
+    {
+        DownloadQueue queue = CreateQueue(
+            "https://example.test/first.bin");
+
+        queue.RestoreSnapshot(
+            queue.Items.Select(
+                item => item with
+                {
+                    RelativeFolder = ".."
+                }).ToArray());
+
+        string? capturedDirectory = null;
+
+        var service = new DelegateTransferService(
+            (request, progress, cancellationToken) =>
+            {
+                capturedDirectory =
+                    request.DestinationDirectory;
+
+                return Task.FromResult(
+                    CreateResult(
+                        request,
+                        bytesWritten: 10));
+            });
+
+        using var orchestrator =
+            new DownloadOrchestrator(
+                queue,
+                service);
+
+        string destination = CreateDestinationPath();
+
+        DownloadBatchResult result =
+            await orchestrator.StartAllAsync(
+                destination,
+                maximumConcurrency: 1);
+
+        Assert.Equal(1, result.CompletedCount);
+        Assert.Equal(destination, capturedDirectory);
+    }
+
     private static DownloadQueue CreateQueue(
         params string[] urls)
     {
