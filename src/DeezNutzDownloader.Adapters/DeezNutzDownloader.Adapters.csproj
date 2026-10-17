@@ -4,6 +4,10 @@
     <ProjectReference Include="..\DeezNutzDownloader.Core\DeezNutzDownloader.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="MegaApiClient" Version="1.10.5" />
+  </ItemGroup>
+
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>

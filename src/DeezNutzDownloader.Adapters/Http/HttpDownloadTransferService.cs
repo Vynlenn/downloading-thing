@@ -43,10 +43,12 @@ public sealed class HttpDownloadTransferService
 
     private readonly HttpClient _httpClient;
     private readonly IReadOnlyList<IHostFileResolver> _resolvers;
+    private readonly IMegaDownloader? _megaDownloader;
 
     public HttpDownloadTransferService(
         HttpClient httpClient,
-        IEnumerable<IHostFileResolver>? resolvers = null)
+        IEnumerable<IHostFileResolver>? resolvers = null,
+        IMegaDownloader? megaDownloader = null)
     {
         _httpClient =
             httpClient ??
@@ -54,6 +56,8 @@ public sealed class HttpDownloadTransferService
 
         _resolvers = resolvers?.ToArray() ??
             Array.Empty<IHostFileResolver>();
+
+        _megaDownloader = megaDownloader;
     }
 
     public async Task<DownloadTransferResult> DownloadAsync(
@@ -117,6 +121,21 @@ public sealed class HttpDownloadTransferService
         long bytesWritten = 0;
         long? totalBytes = advertisedTotalBytes;
         string? fileName = null;
+
+        // MEGA links carry encrypted bytes: decrypt straight into
+        // the temp file instead of the generic HTTP path.
+        if (
+            _megaDownloader is not null &&
+            MegaLinks.IsLink(source))
+        {
+            return await DownloadViaMegaAsync(
+                    source,
+                    destinationDirectory,
+                    temporaryPath,
+                    progress,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
 
         try
         {
@@ -403,6 +422,72 @@ public sealed class HttpDownloadTransferService
             {
                 TryDeleteTemporaryFile(
                     pendingTemporaryPath);
+            }
+
+            throw;
+        }
+    }
+
+    private async Task<DownloadTransferResult> DownloadViaMegaAsync(
+        Uri source,
+        string destinationDirectory,
+        string temporaryPath,
+        IProgress<DownloadTransferProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        string? pendingTemporaryPath = temporaryPath;
+
+        try
+        {
+            MegaFileMetadata metadata =
+                await _megaDownloader!.GetInfoAsync(
+                        source,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+            if (metadata.IsFolder)
+            {
+                throw new InvalidOperationException(
+                    "That MEGA link is a folder. Folder batch " +
+                    "expansion is coming — grab single-file links " +
+                    "for now.");
+            }
+
+            await _megaDownloader.DownloadToAsync(
+                    source,
+                    temporaryPath,
+                    metadata.Size,
+                    progress,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            long bytesWritten = new FileInfo(temporaryPath).Length;
+
+            string fileName =
+                SanitizeFileName(metadata.Name) ?? "download";
+
+            string destinationPath =
+                MoveToAvailableDestination(
+                    temporaryPath,
+                    destinationDirectory,
+                    fileName);
+
+            pendingTemporaryPath = null;
+
+            return new DownloadTransferResult(
+                source,
+                destinationPath,
+                Path.GetFileName(destinationPath),
+                bytesWritten,
+                metadata.Size);
+        }
+        catch
+        {
+            if (pendingTemporaryPath is not null)
+            {
+                TryDeleteTemporaryFile(pendingTemporaryPath);
             }
 
             throw;

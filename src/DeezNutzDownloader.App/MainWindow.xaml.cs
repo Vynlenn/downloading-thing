@@ -929,7 +929,8 @@ public partial class MainWindow : Window
                             new PixeldrainResolver(),
                             new GofileResolver(),
                             new MediaFireResolver()
-                        }));
+                        },
+                        new MegaDownloadService()));
 
             _activeDownloadHttpClient = httpClient;
             _activeDownloadOrchestrator = orchestrator;
