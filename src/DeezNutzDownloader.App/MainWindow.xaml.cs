@@ -135,6 +135,8 @@ public partial class MainWindow : Window
             _settings.OrganizeIntoSiteFolders;
         ClipboardWatchCheckBox.IsChecked =
             _settings.ClipboardWatchEnabled;
+        AskExtractCheckBox.IsChecked =
+            _settings.AskBeforeArchiveExtraction;
         QuietHoursCheckBox.IsChecked =
             _settings.QuietHoursEnabled;
         QuietStartTextBox.Text = FormatClock(
@@ -1024,6 +1026,11 @@ public partial class MainWindow : Window
 
                 restartAfterSolve =
                     await OfferChallengeSolvesAsync(batchChallenges);
+
+                if (!restartAfterSolve)
+                {
+                    await OfferArchiveExtractionAsync();
+                }
             }
         }
         catch (Exception exception)
@@ -1265,6 +1272,108 @@ public partial class MainWindow : Window
 
         return solveWindow.ShowDialog() == true &&
             solveWindow.SessionSaved;
+    }
+
+    /// <summary>
+    /// Offers ZIP extraction for freshly completed archives.
+    /// AskBeforeArchiveExtraction=true prompts; false extracts
+    /// silently. RAR/7z are reported as extract-manually.
+    /// </summary>
+    private async Task OfferArchiveExtractionAsync()
+    {
+        List<string> zips = _downloadQueue.Items
+            .Where(item =>
+                item.State ==
+                    DownloadQueueItemState.Completed &&
+                ArchiveExtraction.IsSupportedArchive(
+                    item.DestinationPath))
+            .Select(item => item.DestinationPath!)
+            .Where(File.Exists)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        List<string> others = _downloadQueue.Items
+            .Where(item =>
+                item.State ==
+                    DownloadQueueItemState.Completed &&
+                ArchiveExtraction.IsUnsupportedArchive(
+                    item.DestinationPath))
+            .Select(item => item.DestinationPath!)
+            .Where(File.Exists)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (zips.Count == 0 && others.Count == 0)
+        {
+            return;
+        }
+
+        if (zips.Count > 0)
+        {
+            bool extract = true;
+
+            if (_settings.AskBeforeArchiveExtraction)
+            {
+                MessageBoxResult answer = MessageBox.Show(
+                    this,
+                    $"{zips.Count} ZIP archive" +
+                    $"{(zips.Count == 1 ? "" : "s")} finished. " +
+                    "Extract now?",
+                    "Extract archives",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Question);
+
+                extract = answer == MessageBoxResult.Yes;
+            }
+
+            if (extract)
+            {
+                int files = 0;
+                int skipped = 0;
+
+                await Task.Run(() =>
+                {
+                    foreach (string zip in zips)
+                    {
+                        try
+                        {
+                            ArchiveExtractionResult result =
+                                ArchiveExtraction.ExtractZip(zip);
+
+                            files += result.ExtractedCount;
+                            skipped += result.SkippedCount;
+                        }
+                        catch (Exception exception)
+                        {
+                            Dispatcher.Invoke(() =>
+                                ApplicationStatusText.Text =
+                                $"Could not extract " +
+                                $"{Path.GetFileName(zip)}: " +
+                                exception.Message);
+                        }
+                    }
+                });
+
+                ApplicationStatusText.Text =
+                    $"Extracted {files} file" +
+                    $"{(files == 1 ? "" : "s")}" +
+                    (skipped > 0 ? $" ({skipped} skipped)" : "") +
+                    " from ZIP archives.";
+
+                await _log.InformationAsync(
+                    $"Archive extraction finished. Files: {files}; " +
+                    $"skipped: {skipped}.");
+            }
+        }
+
+        if (others.Count > 0)
+        {
+            ApplicationStatusText.Text +=
+                (zips.Count > 0 ? " " : string.Empty) +
+                $"{others.Count} RAR/7z archive" +
+                $"{(others.Count == 1 ? "" : "s")} need" +
+                " manual extraction (ZIP only for now).";
+        }
     }
 
     private void RequeueHostFailures(string host)
@@ -1870,6 +1979,8 @@ public partial class MainWindow : Window
                 OrganizeFoldersCheckBox.IsChecked != false;
             _settings.ClipboardWatchEnabled =
                 ClipboardWatchCheckBox.IsChecked != false;
+            _settings.AskBeforeArchiveExtraction =
+                AskExtractCheckBox.IsChecked != false;
             _settings.QuietHoursEnabled =
                 QuietHoursCheckBox.IsChecked == true;
             _settings.QuietHoursStartHour = ParseClockHour(

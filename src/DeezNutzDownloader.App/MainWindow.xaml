@@ -579,6 +579,10 @@
                                           Margin="0,8,0,0"
                                           Content="Watch clipboard for new links" />
 
+                                <CheckBox x:Name="AskExtractCheckBox"
+                                          Margin="0,8,0,0"
+                                          Content="Ask before extracting ZIP archives" />
+
                                 <CheckBox x:Name="QuietHoursCheckBox"
                                           Margin="0,14,0,0"
                                           Content="Slow down overnight (quiet hours)" />
