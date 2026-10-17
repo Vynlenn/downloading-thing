@@ -24,7 +24,7 @@ public enum ProxyType
 
 public sealed class AppSettings
 {
-    public int ConfigurationVersion { get; set; } = 2;
+    public int ConfigurationVersion { get; set; } = 3;
 
     public string DownloadFolder { get; set; } = string.Empty;
 
@@ -38,9 +38,25 @@ public sealed class AppSettings
 
     public int ProxyPort { get; set; } = 8080;
 
+    public string ProxyUsername { get; set; } = string.Empty;
+
+    /// <summary>
+    /// DPAPI-encrypted proxy password (base64). Empty means none.
+    /// The cleartext password is never persisted.
+    /// </summary>
+    public string ProxyPasswordProtected { get; set; } = string.Empty;
+
     public bool AskBeforeArchiveExtraction { get; set; } = true;
 
     public bool SkipExactDuplicates { get; set; } = true;
 
     public int MaximumConcurrentDownloads { get; set; } = 3;
+
+    public string YtDlpPath { get; set; } = string.Empty;
+
+    public string FFmpegPath { get; set; } = string.Empty;
+
+    public bool OrganizeIntoSiteFolders { get; set; } = true;
+
+    public bool ClipboardWatchEnabled { get; set; } = true;
 }
