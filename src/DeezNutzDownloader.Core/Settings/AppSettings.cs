@@ -65,4 +65,11 @@ public sealed class AppSettings
     /// the managed tools folder. Manual paths always win.
     /// </summary>
     public bool ExternalToolsAutoUpdate { get; set; } = true;
+
+    /// <summary>
+    /// Optional yt-dlp --cookies-from-browser value (e.g. "chrome"
+    /// or "firefox:profile"). Empty means off. Uses the user's own
+    /// logged-in session for video sites that need a login.
+    /// </summary>
+    public string YtDlpCookiesFromBrowser { get; set; } = string.Empty;
 }

@@ -123,6 +123,10 @@ public partial class MainWindow : Window
             _settings.MaximumConcurrentDownloads.ToString();
         YtDlpPathTextBox.Text = _settings.YtDlpPath;
         FFmpegPathTextBox.Text = _settings.FFmpegPath;
+        YtDlpCookiesTextBox.Text =
+            _settings.YtDlpCookiesFromBrowser;
+        AutoToolsCheckBox.IsChecked =
+            _settings.ExternalToolsAutoUpdate;
         OrganizeFoldersCheckBox.IsChecked =
             _settings.OrganizeIntoSiteFolders;
         ClipboardWatchCheckBox.IsChecked =
@@ -259,7 +263,7 @@ public partial class MainWindow : Window
             LinkGrabberStatusText.Text =
                 "Fetching the page and filtering its links…";
 
-            PageExtractionResult result;
+            PageCrawlResult result;
 
             try
             {
@@ -281,10 +285,12 @@ public partial class MainWindow : Window
             if (result.Files.Count == 0)
             {
                 LinkGrabberStatusText.Text =
-                    $"No file links found — scanned " +
-                    $"{result.AnchorsExamined} links, skipped " +
-                    $"{result.SkippedCount} (avatars, logos, " +
-                    "navigation).";
+                    $"No file links found — walked " +
+                    $"{result.PagesVisited} page" +
+                    $"{(result.PagesVisited == 1 ? "" : "s")}, " +
+                    $"scanned {result.AnchorsExamined} links, " +
+                    $"skipped {result.SkippedCount} (avatars, " +
+                    "logos, navigation).";
 
                 ApplicationStatusText.Text =
                     "Page crawl finished - no files found";
@@ -299,7 +305,9 @@ public partial class MainWindow : Window
             AnalyzeLinks_Click(this, new RoutedEventArgs());
 
             LinkGrabberStatusText.Text =
-                $"Crawled page: {result.Files.Count} file link" +
+                $"Crawled {result.PagesVisited} page" +
+                $"{(result.PagesVisited == 1 ? "" : "s")}: " +
+                $"{result.Files.Count} file link" +
                 $"{(result.Files.Count == 1 ? "" : "s")} ready, " +
                 $"{result.SkippedCount} junk skipped. Review " +
                 "below, then add to the queue.";
@@ -390,21 +398,54 @@ public partial class MainWindow : Window
         try
         {
             LinkGrabberStatusText.Text =
-                "Checking yt-dlp…";
+                "Preparing media tools…";
+
+            string ytDlpPath;
+            string ffmpegPath;
+
+            using (HttpClient toolClient =
+                DownloadHttpClientFactory.Create(_settings))
+            {
+                var provisioner = new ExternalToolProvisioner(
+                    toolClient,
+                    _paths.ToolsDirectory);
+
+                var toolLog = new Progress<string>(line =>
+                    LinkGrabberStatusText.Text = line);
+
+                ytDlpPath = await provisioner.ResolveAsync(
+                    ExternalTool.YtDlp,
+                    _settings.YtDlpPath,
+                    _settings.ExternalToolsAutoUpdate,
+                    toolLog);
+
+                ffmpegPath = await provisioner.ResolveAsync(
+                    ExternalTool.FFmpeg,
+                    _settings.FFmpegPath,
+                    _settings.ExternalToolsAutoUpdate,
+                    toolLog);
+            }
 
             bool available =
                 await Task.Run(
-                    () => media.IsAvailableAsync(_settings.YtDlpPath));
+                    () => media.IsAvailableAsync(ytDlpPath));
 
             if (!available)
             {
                 LinkGrabberStatusText.Text =
-                    "yt-dlp was not found. Set its path in Settings " +
-                    "(or install it on PATH), then try again.";
+                    "yt-dlp was not found. Turn on automatic media " +
+                    "tools in Settings (or set a path / install it " +
+                    "on PATH), then try again.";
 
                 ShowPage("Settings");
                 return;
             }
+
+            string? browserCookies =
+                string.IsNullOrWhiteSpace(
+                    _settings.YtDlpCookiesFromBrowser)
+                    ? null
+                    : _settings.YtDlpCookiesFromBrowser.Trim();
 
             LinkGrabberStatusText.Text =
                 "Probing video formats with yt-dlp…";
@@ -413,9 +454,10 @@ public partial class MainWindow : Window
                 await Task.Run(
                     () => media.ProbeAsync(
                         videoUrl,
-                        _settings.YtDlpPath,
+                        ytDlpPath,
                         CancellationToken.None,
-                        proxyUrl));
+                        proxyUrl,
+                        browserCookies));
 
             LinkGrabberStatusText.Text = probe.IsPlaylist
                 ? $"Found: {probe.Summary}. Playlists currently " +
@@ -448,11 +490,12 @@ public partial class MainWindow : Window
                         videoUrl,
                         formatId: null,
                         _settings.DownloadFolder,
-                        _settings.YtDlpPath,
-                        _settings.FFmpegPath,
+                        ytDlpPath,
+                        ffmpegPath,
                         progress,
                         CancellationToken.None,
-                        proxyUrl));
+                        proxyUrl,
+                        browserCookies));
 
             LinkGrabberStatusText.Text =
                 $"Saved {Path.GetFileName(savedPath)} " +
@@ -1062,7 +1105,7 @@ public partial class MainWindow : Window
         return anySolved;
     }
 
-    private async Task<PageExtractionResult> FetchAndExtractAsync(
+    private async Task<PageCrawlResult> FetchAndExtractAsync(
         Uri page)
     {
         using HttpClient client =
@@ -1072,7 +1115,8 @@ public partial class MainWindow : Window
 
         var crawler = new PageLinkCrawler(client);
 
-        return await crawler.ExtractFromPageAsync(page.AbsoluteUri);
+        return await crawler.ExtractFromPagesAsync(
+            page.AbsoluteUri);
     }
 
     /// <summary>
@@ -1595,6 +1639,10 @@ public partial class MainWindow : Window
                 maximumConcurrency;
             _settings.YtDlpPath = YtDlpPathTextBox.Text.Trim();
             _settings.FFmpegPath = FFmpegPathTextBox.Text.Trim();
+            _settings.YtDlpCookiesFromBrowser =
+                YtDlpCookiesTextBox.Text.Trim();
+            _settings.ExternalToolsAutoUpdate =
+                AutoToolsCheckBox.IsChecked != false;
             _settings.OrganizeIntoSiteFolders =
                 OrganizeFoldersCheckBox.IsChecked != false;
             _settings.ClipboardWatchEnabled =

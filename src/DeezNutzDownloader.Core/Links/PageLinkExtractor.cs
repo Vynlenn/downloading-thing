@@ -12,7 +12,8 @@ public sealed record PageLinkCandidate(
 public sealed record PageExtractionResult(
     IReadOnlyList<PageLinkCandidate> Files,
     int AnchorsExamined,
-    int SkippedCount);
+    int SkippedCount,
+    string? NextPageUrl = null);
 
 /// <summary>
 /// Finds downloadable file links on a pasted page and filters out
@@ -74,7 +75,7 @@ public static partial class PageLinkExtractor
     };
 
     [GeneratedRegex(
-        """<a\b[^>]*?\bhref\s*=\s*["'](?<url>[^"'<>]+)["']""",
+        """<a\b(?<tag>[^>]*?)\bhref\s*=\s*["'](?<url>[^"'<>]+)["']""",
         RegexOptions.IgnoreCase | RegexOptions.Singleline,
         matchTimeoutMilliseconds: 2000)]
     private static partial Regex AnchorHrefRegex();
@@ -107,6 +108,7 @@ public static partial class PageLinkExtractor
         var files = new List<PageLinkCandidate>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         int examined = 0;
+        string? nextPage = null;
 
         foreach (Match match in AnchorHrefRegex().Matches(html))
         {
@@ -126,6 +128,19 @@ public static partial class PageLinkExtractor
                 continue;
             }
 
+            // Pagination is discovered alongside files so one pass
+            // serves single pages and gallery walks alike. First
+            // rel=next (or obvious page-N link) wins.
+            if (
+                nextPage is null &&
+                IsNextPageLink(
+                    normalized,
+                    match.Groups["tag"].Value,
+                    page))
+            {
+                nextPage = normalized;
+            }
+
             string? reason = Classify(normalized);
 
             if (reason is null)
@@ -142,7 +157,8 @@ public static partial class PageLinkExtractor
         return new PageExtractionResult(
             files.AsReadOnly(),
             examined,
-            Math.Max(0, examined - files.Count));
+            Math.Max(0, examined - files.Count),
+            nextPage);
     }
 
     private static Uri ResolveBaseUri(string html, Uri page)
@@ -250,6 +266,69 @@ public static partial class PageLinkExtractor
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// True for a same-host pagination link: an explicit
+    /// rel="next" anchor, or an obvious page-N address
+    /// (?page=2, /page/3, ?offset=…). Never cross-host, never the
+    /// page itself — gallery walks stay on rails.
+    /// </summary>
+    public static bool IsNextPageLink(
+        string normalizedUrl,
+        string anchorTag,
+        Uri page)
+    {
+        if (!Uri.TryCreate(normalizedUrl, UriKind.Absolute, out Uri? link))
+        {
+            return false;
+        }
+
+        if (
+            !link.Host.Equals(page.Host, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (
+            string.Equals(
+                link.AbsoluteUri,
+                page.AbsoluteUri,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        // A known file link is content, never pagination.
+        if (Classify(normalizedUrl) is not null)
+        {
+            return false;
+        }
+
+        if (
+            anchorTag.Contains("rel", StringComparison.OrdinalIgnoreCase) &&
+            anchorTag.Contains("next", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        string path = link.AbsolutePath;
+        string query = link.Query;
+
+        if (
+            System.Text.RegularExpressions.Regex.IsMatch(
+                path,
+                @"/page[=/]\d+",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase) ||
+            System.Text.RegularExpressions.Regex.IsMatch(
+                query,
+                @"[?&](page|p|pg|offset)=\d+",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+        {
+            return true;
+        }
+
+        return false;
     }
 
     private static bool IsKnownFileHost(string host)

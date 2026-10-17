@@ -723,9 +723,12 @@
                                 BorderBrush="{DynamicResource BorderBrush}"
                                 BorderThickness="1">
                             <StackPanel>
-                                <TextBlock Text="Video grabs use the yt-dlp and FFmpeg programs installed on this PC. Leave a field empty to use the program found on PATH. Paste a video page in LinkGrabber and use Grab video."
+                                <TextBlock Text="Video grabs use the yt-dlp and FFmpeg programs. Automatic mode downloads official builds into the app data folder and keeps them working. Manual paths always win; leave a field empty to use the program found on PATH."
                                            Foreground="{DynamicResource MutedTextBrush}"
                                            TextWrapping="Wrap" />
+                                <CheckBox x:Name="AutoToolsCheckBox"
+                                          Margin="0,12,0,0"
+                                          Content="Download and maintain yt-dlp / FFmpeg automatically" />
                                 <TextBlock Margin="0,12,0,6"
                                            Text="yt-dlp path (optional)"
                                            FontWeight="SemiBold" />
@@ -734,6 +737,15 @@
                                            Text="FFmpeg path (optional)"
                                            FontWeight="SemiBold" />
                                 <TextBox x:Name="FFmpegPathTextBox" />
+                                <TextBlock Margin="0,12,0,6"
+                                           Text="Browser cookies for yt-dlp (optional)"
+                                           FontWeight="SemiBold" />
+                                <TextBox x:Name="YtDlpCookiesTextBox"
+                                         ToolTip="e.g. chrome, firefox, edge, or brave:profile-name. Uses your own logged-in session for video sites that need a login. Leave empty to turn off." />
+                                <TextBlock Margin="0,3,0,0"
+                                           Foreground="{DynamicResource MutedTextBrush}"
+                                           TextWrapping="Wrap"
+                                           Text="Optional: e.g. chrome or firefox. Reads cookies from your own browser so yt-dlp can reach videos your account can see." />
                             </StackPanel>
                         </Border>
 

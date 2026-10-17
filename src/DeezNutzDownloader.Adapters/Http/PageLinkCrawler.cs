@@ -4,12 +4,25 @@ using DeezNutzDownloader.Core.Links;
 namespace DeezNutzDownloader.Adapters.Http;
 
 /// <summary>
-/// Fetches one user-pasted page (never a recursive spider) and
-/// extracts its file-host links. The injected HttpClient carries
-/// the app's proxy and timeout policy.
+/// One gallery walk: deduplicated file links across every page
+/// visited, in walk order.
+/// </summary>
+public sealed record PageCrawlResult(
+    IReadOnlyList<PageLinkCandidate> Files,
+    int PagesVisited,
+    int AnchorsExamined,
+    int SkippedCount);
+
+/// <summary>
+/// Fetches a user-pasted page (or walks its gallery pagination)
+/// and extracts file-host links. The injected HttpClient carries
+/// the app's proxy, cookies and timeout policy. Pagination never
+/// leaves the start host and never revisits a page.
 /// </summary>
 public sealed class PageLinkCrawler
 {
+    public const int DefaultMaxPages = 10;
+
     private const int MaximumHtmlBytes = 5_000_000;
     private static readonly TimeSpan FetchTimeout = TimeSpan.FromSeconds(30);
 
@@ -26,6 +39,84 @@ public sealed class PageLinkCrawler
         string pageUrl,
         CancellationToken cancellationToken = default)
     {
+        Uri page = ValidatePageUrl(pageUrl);
+
+        string html = await FetchHtmlAsync(page, cancellationToken)
+            .ConfigureAwait(false);
+
+        return PageLinkExtractor.Extract(html, page.AbsoluteUri);
+    }
+
+    /// <summary>
+    /// Walks gallery pagination from the pasted page, merging
+    /// deduplicated file links. Stops at maxPages, a page without
+    /// a next link, a repeated page, or a challenge (which throws
+    /// typed, so the UI can solve and the user retries).
+    /// </summary>
+    public async Task<PageCrawlResult> ExtractFromPagesAsync(
+        string pageUrl,
+        int maxPages = DefaultMaxPages,
+        CancellationToken cancellationToken = default)
+    {
+        Uri start = ValidatePageUrl(pageUrl);
+
+        if (maxPages < 1)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxPages),
+                "At least one page must be visited.");
+        }
+
+        var files = new List<PageLinkCandidate>();
+        var seenUrls = new HashSet<string>(
+            StringComparer.OrdinalIgnoreCase);
+        var visited = new HashSet<string>(
+            StringComparer.OrdinalIgnoreCase);
+
+        int anchorsExamined = 0;
+        int skippedCount = 0;
+        string? next = start.AbsoluteUri;
+
+        while (
+            next is not null &&
+            visited.Count < maxPages)
+        {
+            if (!visited.Add(next))
+            {
+                break;
+            }
+
+            Uri page = new(next, UriKind.Absolute);
+
+            string html = await FetchHtmlAsync(page, cancellationToken)
+                .ConfigureAwait(false);
+
+            PageExtractionResult result =
+                PageLinkExtractor.Extract(html, page.AbsoluteUri);
+
+            anchorsExamined += result.AnchorsExamined;
+            skippedCount += result.SkippedCount;
+
+            foreach (PageLinkCandidate file in result.Files)
+            {
+                if (seenUrls.Add(file.Url))
+                {
+                    files.Add(file);
+                }
+            }
+
+            next = NormalizeNext(result.NextPageUrl, start);
+        }
+
+        return new PageCrawlResult(
+            files.AsReadOnly(),
+            visited.Count,
+            anchorsExamined,
+            skippedCount);
+    }
+
+    private static Uri ValidatePageUrl(string pageUrl)
+    {
         if (
             !Uri.TryCreate(pageUrl?.Trim(), UriKind.Absolute, out Uri? page) ||
             (page.Scheme != Uri.UriSchemeHttp &&
@@ -37,6 +128,36 @@ public sealed class PageLinkCrawler
                 nameof(pageUrl));
         }
 
+        return page;
+    }
+
+    private static string? NormalizeNext(
+        string? nextPageUrl,
+        Uri start)
+    {
+        if (string.IsNullOrWhiteSpace(nextPageUrl))
+        {
+            return null;
+        }
+
+        if (
+            !Uri.TryCreate(nextPageUrl, UriKind.Absolute, out Uri? next) ||
+            (next.Scheme != Uri.UriSchemeHttp &&
+             next.Scheme != Uri.UriSchemeHttps) ||
+            !next.Host.Equals(
+                start.Host,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        return next.AbsoluteUri;
+    }
+
+    private async Task<string> FetchHtmlAsync(
+        Uri page,
+        CancellationToken cancellationToken)
+    {
         using var timeoutSource =
             new CancellationTokenSource(FetchTimeout);
 
@@ -47,7 +168,6 @@ public sealed class PageLinkCrawler
 
         CancellationToken linkedToken = linkedSource.Token;
 
-        string html;
         try
         {
             using var request =
@@ -81,8 +201,7 @@ public sealed class PageLinkCrawler
                 mediaType is not null &&
                 !mediaType.Contains(
                     "html",
-                    StringComparison.OrdinalIgnoreCase)
-            )
+                    StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidOperationException(
                     "That address is a file, not a page. " +
@@ -98,7 +217,7 @@ public sealed class PageLinkCrawler
                     "That page is too large to scan (over 5 MB of HTML).");
             }
 
-            html = await ReadCappedAsync(
+            return await ReadCappedAsync(
                     response.Content,
                     linkedToken)
                 .ConfigureAwait(false);
@@ -109,8 +228,6 @@ public sealed class PageLinkCrawler
             throw new TimeoutException(
                 "The page took too long to respond (30s limit).");
         }
-
-        return PageLinkExtractor.Extract(html, page.AbsoluteUri);
     }
 
     /// <summary>

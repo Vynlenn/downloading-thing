@@ -43,7 +43,8 @@ public interface IYtDlpMediaService
         string url,
         string configuredPath,
         CancellationToken cancellationToken = default,
-        string? proxyUrl = null);
+        string? proxyUrl = null,
+        string? cookiesFromBrowser = null);
 
     /// <returns>The final media file path.</returns>
     Task<string> DownloadAsync(
@@ -54,7 +55,8 @@ public interface IYtDlpMediaService
         string ffmpegPath,
         IProgress<string>? log = null,
         CancellationToken cancellationToken = default,
-        string? proxyUrl = null);
+        string? proxyUrl = null,
+        string? cookiesFromBrowser = null);
 }
 
 public static class YtDlpProbeParser
@@ -322,7 +324,8 @@ public static class YtDlpArgumentBuilder
 {
     public static List<string> BuildProbe(
         string url,
-        string? proxyUrl = null)
+        string? proxyUrl = null,
+        string? cookiesFromBrowser = null)
     {
         var arguments = new List<string>
         {
@@ -333,6 +336,7 @@ public static class YtDlpArgumentBuilder
         };
 
         AddProxy(arguments, proxyUrl);
+        AddBrowserCookies(arguments, cookiesFromBrowser);
         arguments.Add(url);
         return arguments;
     }
@@ -342,7 +346,8 @@ public static class YtDlpArgumentBuilder
         string? formatId,
         string outputTemplate,
         string ffmpegPath,
-        string? proxyUrl = null)
+        string? proxyUrl = null,
+        string? cookiesFromBrowser = null)
     {
         var arguments = new List<string>
         {
@@ -367,8 +372,20 @@ public static class YtDlpArgumentBuilder
         }
 
         AddProxy(arguments, proxyUrl);
+        AddBrowserCookies(arguments, cookiesFromBrowser);
         arguments.Add(url);
         return arguments;
+    }
+
+    private static void AddBrowserCookies(
+        List<string> arguments,
+        string? cookiesFromBrowser)
+    {
+        if (!string.IsNullOrWhiteSpace(cookiesFromBrowser))
+        {
+            arguments.Add("--cookies-from-browser");
+            arguments.Add(cookiesFromBrowser.Trim());
+        }
     }
 
     private static void AddProxy(
@@ -452,7 +469,8 @@ public sealed class YtDlpMediaService : IYtDlpMediaService
         string url,
         string configuredPath,
         CancellationToken cancellationToken = default,
-        string? proxyUrl = null)
+        string? proxyUrl = null,
+        string? cookiesFromBrowser = null)
     {
         Uri source = ValidateUrl(url);
         string? executable = ResolveExecutable(configuredPath);
@@ -471,7 +489,8 @@ public sealed class YtDlpMediaService : IYtDlpMediaService
                     executable,
                     YtDlpArgumentBuilder.BuildProbe(
                         source.AbsoluteUri,
-                        proxyUrl),
+                        proxyUrl,
+                        cookiesFromBrowser),
                     workLog: null,
                     timeout: TimeSpan.FromSeconds(60),
                     cancellationToken)
@@ -517,7 +536,8 @@ public sealed class YtDlpMediaService : IYtDlpMediaService
         string ffmpegPath,
         IProgress<string>? log = null,
         CancellationToken cancellationToken = default,
-        string? proxyUrl = null)
+        string? proxyUrl = null,
+        string? cookiesFromBrowser = null)
     {
         Uri source = ValidateUrl(url);
 
@@ -552,7 +572,8 @@ public sealed class YtDlpMediaService : IYtDlpMediaService
                 formatId,
                 template,
                 ffmpegPath,
-                proxyUrl);
+                proxyUrl,
+                cookiesFromBrowser);
 
         ProcessResult result;
         try
