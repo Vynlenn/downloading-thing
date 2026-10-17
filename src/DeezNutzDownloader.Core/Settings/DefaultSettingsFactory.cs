@@ -13,7 +13,8 @@ public static class DefaultSettingsFactory
             ProxyPort = 8080,
             AskBeforeArchiveExtraction = true,
             SkipExactDuplicates = true,
-            MaximumConcurrentDownloads = 3
+            MaximumConcurrentDownloads = 3,
+            ExternalToolsAutoUpdate = true
         };
     }
 

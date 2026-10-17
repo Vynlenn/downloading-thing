@@ -24,7 +24,7 @@ public enum ProxyType
 
 public sealed class AppSettings
 {
-    public int ConfigurationVersion { get; set; } = 3;
+    public int ConfigurationVersion { get; set; } = 4;
 
     public string DownloadFolder { get; set; } = string.Empty;
 
@@ -59,4 +59,10 @@ public sealed class AppSettings
     public bool OrganizeIntoSiteFolders { get; set; } = true;
 
     public bool ClipboardWatchEnabled { get; set; } = true;
+
+    /// <summary>
+    /// When true (default), yt-dlp/ffmpeg are auto-downloaded into
+    /// the managed tools folder. Manual paths always win.
+    /// </summary>
+    public bool ExternalToolsAutoUpdate { get; set; } = true;
 }

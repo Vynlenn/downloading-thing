@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Net.Http.Headers;
 using System.Text;
+using DeezNutzDownloader.Core.Challenges;
 using DeezNutzDownloader.Core.Downloads;
 
 namespace DeezNutzDownloader.Adapters.Http;
@@ -148,18 +149,33 @@ public sealed class HttpDownloadTransferService
 
                 if (
                     response.StatusCode ==
-                        System.Net.HttpStatusCode.Forbidden &&
-                    HostThrottlePolicy.IsSingleLaneHost(source.Host)
-                )
+                        System.Net.HttpStatusCode.Forbidden)
                 {
-                    throw new HostThrottledException(
-                        source.Host,
-                        HostThrottlePolicy.FriendlyMessage(
+                    ChallengeKind? challenge =
+                        await DetectChallengeAsync(
+                                response,
+                                source,
+                                cancellationToken)
+                            .ConfigureAwait(false);
+
+                    if (challenge.HasValue)
+                    {
+                        throw BuildChallengeException(
+                            source,
+                            challenge.Value);
+                    }
+
+                    if (HostThrottlePolicy.IsSingleLaneHost(source.Host))
+                    {
+                        throw new HostThrottledException(
                             source.Host,
-                            response.StatusCode,
-                            retryAfter: null,
-                            isPixeldrainQuotaBody: true),
-                        isQuotaExhausted: true);
+                            HostThrottlePolicy.FriendlyMessage(
+                                source.Host,
+                                response.StatusCode,
+                                retryAfter: null,
+                                isPixeldrainQuotaBody: true),
+                            isQuotaExhausted: true);
+                    }
                 }
 
                 if (
@@ -355,6 +371,63 @@ public sealed class HttpDownloadTransferService
 
             throw;
         }
+    }
+
+    /// <summary>
+    /// Reads a bounded snippet of a 403 page and asks the pure
+    /// detector what wall (if any) the host put up. Never throws:
+    /// an unreadable body simply means "no detectable challenge".
+    /// </summary>
+    public static async Task<ChallengeKind?> DetectChallengeAsync(
+        HttpResponseMessage response,
+        Uri source,
+        CancellationToken cancellationToken)
+    {
+        string snippet;
+
+        try
+        {
+            snippet = await ErrorSnippetReader.ReadSnippetAsync(
+                    response.Content,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch
+        {
+            return null;
+        }
+
+        return ChallengeDetector.Detect(
+            response.StatusCode,
+            response.Content.Headers.ContentType?.MediaType,
+            snippet,
+            source.Host);
+    }
+
+    public static Exception BuildChallengeException(
+        Uri source,
+        ChallengeKind kind)
+    {
+        if (kind == ChallengeKind.QuotaWall)
+        {
+            return new HostThrottledException(
+                source.Host,
+                HostThrottlePolicy.FriendlyMessage(
+                    source.Host,
+                    System.Net.HttpStatusCode.Forbidden,
+                    retryAfter: null,
+                    isPixeldrainQuotaBody: true),
+                isQuotaExhausted: true);
+        }
+
+        return new ChallengeDetectedException(
+            source.Host,
+            kind,
+            source.AbsoluteUri,
+            ChallengeDetector.FriendlyMessage(
+                source.Host,
+                kind,
+                source.AbsoluteUri));
     }
 
     private static Uri ValidateSource(Uri? source)

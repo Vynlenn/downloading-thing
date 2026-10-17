@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Http;
+using DeezNutzDownloader.Adapters.Http;
+using DeezNutzDownloader.Core.Challenges;
 using DeezNutzDownloader.Core.Settings;
 using DeezNutzDownloader.Infrastructure.Security;
 
@@ -8,7 +10,8 @@ namespace DeezNutzDownloader.App.Networking;
 internal static class DownloadHttpClientFactory
 {
     public static HttpClient Create(
-        AppSettings settings)
+        AppSettings settings,
+        IChallengeSessionStore? sessionStore = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
 
@@ -39,8 +42,19 @@ internal static class DownloadHttpClientFactory
                 CredentialCache.DefaultCredentials;
         }
 
+        HttpMessageHandler pipeline = handler;
+
+        if (sessionStore is not null)
+        {
+            // Solved-challenge cookies replay per host; without a
+            // session the request proceeds exactly as before.
+            pipeline = new ChallengeCookieHandler(
+                sessionStore,
+                handler);
+        }
+
         return new HttpClient(
-            handler,
+            pipeline,
             disposeHandler: true)
         {
             // Large downloads must not be terminated by

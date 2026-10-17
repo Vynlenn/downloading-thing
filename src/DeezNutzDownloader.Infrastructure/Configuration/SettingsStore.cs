@@ -80,6 +80,16 @@ public sealed class SettingsStore
                 settingsChanged = true;
             }
 
+            // Version 4 introduces managed yt-dlp/ffmpeg.
+            // Existing installs opt in automatically; the toggle
+            // plus manual paths remain available in Settings.
+            if (settings.ConfigurationVersion < 4)
+            {
+                settings.ConfigurationVersion = 4;
+                settings.ExternalToolsAutoUpdate = true;
+                settingsChanged = true;
+            }
+
             if (settingsChanged)
             {
                 await SaveAsync(settings);

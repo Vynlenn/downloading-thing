@@ -1,3 +1,4 @@
+using DeezNutzDownloader.Core.Challenges;
 using DeezNutzDownloader.Core.Links;
 
 namespace DeezNutzDownloader.Adapters.Http;
@@ -59,6 +60,18 @@ public sealed class PageLinkCrawler
                         linkedToken)
                     .ConfigureAwait(false);
 
+            if (
+                response.StatusCode ==
+                    System.Net.HttpStatusCode.Forbidden ||
+                response.StatusCode ==
+                    System.Net.HttpStatusCode.Unauthorized)
+            {
+                throw await BuildChallengeOrFailureAsync(
+                        response,
+                        page)
+                    .ConfigureAwait(false);
+            }
+
             response.EnsureSuccessStatusCode();
 
             string? mediaType =
@@ -98,6 +111,52 @@ public sealed class PageLinkCrawler
         }
 
         return PageLinkExtractor.Extract(html, page.AbsoluteUri);
+    }
+
+    /// <summary>
+    /// Turns a 403/401 crawl response into a typed challenge when
+    /// the page carries challenge markers, otherwise the usual
+    /// HTTP error. Never throws itself.
+    /// </summary>
+    public static async Task<Exception> BuildChallengeOrFailureAsync(
+        HttpResponseMessage response,
+        Uri page)
+    {
+        string snippet = string.Empty;
+
+        try
+        {
+            snippet = await ErrorSnippetReader.ReadSnippetAsync(
+                    response.Content)
+                .ConfigureAwait(false);
+        }
+        catch
+        {
+            // Fall through to the generic error below.
+        }
+
+        ChallengeKind? challenge = ChallengeDetector.Detect(
+            response.StatusCode,
+            response.Content.Headers.ContentType?.MediaType,
+            snippet,
+            page.Host);
+
+        if (challenge.HasValue)
+        {
+            return new ChallengeDetectedException(
+                page.Host,
+                challenge.Value,
+                page.AbsoluteUri,
+                ChallengeDetector.FriendlyMessage(
+                    page.Host,
+                    challenge.Value,
+                    page.AbsoluteUri),
+                isSolvableInBrowser:
+                    challenge.Value != ChallengeKind.QuotaWall);
+        }
+
+        return new HttpRequestException(
+            $"The page request failed ({(int)response.StatusCode}).");
     }
 
     private static async Task<string> ReadCappedAsync(
