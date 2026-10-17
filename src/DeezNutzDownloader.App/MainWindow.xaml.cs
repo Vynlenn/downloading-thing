@@ -907,7 +907,11 @@ public partial class MainWindow : Window
                 new DownloadOrchestrator(
                     _downloadQueue,
                     new HttpDownloadTransferService(
-                        httpClient));
+                        httpClient,
+                        new IHostFileResolver[]
+                        {
+                            new PixeldrainResolver()
+                        }));
 
             _activeDownloadHttpClient = httpClient;
             _activeDownloadOrchestrator = orchestrator;

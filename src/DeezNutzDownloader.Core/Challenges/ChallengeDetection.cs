@@ -97,12 +97,21 @@ public static class ChallengeDetector
         string? bodySnippet,
         string host)
     {
-        // Pixeldrain answers quota exhaustion as 403 on its API/file
-        // hosts. That wall cannot be solved in a browser.
+        // Pixeldrain answers quota exhaustion as 403 — but its
+        // hotlink/file-rate-limit CAPTCHAs arrive as 403 too (the
+        // API names them *_captcha_required / hotlink_detected).
+        // Only the CAPTCHA flavor is solvable in a browser.
         if (
             status == HttpStatusCode.Forbidden &&
             IsPixeldrainHost(host))
         {
+            if (
+                !string.IsNullOrWhiteSpace(bodySnippet) &&
+                ContainsAny(bodySnippet, CaptchaMarkers))
+            {
+                return ChallengeKind.Captcha;
+            }
+
             return ChallengeKind.QuotaWall;
         }
 

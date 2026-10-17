@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using DeezNutzDownloader.Core.Challenges;
 using DeezNutzDownloader.Core.Downloads;
+using DeezNutzDownloader.Core.Links;
 
 namespace DeezNutzDownloader.Adapters.Http;
 
@@ -41,12 +42,18 @@ public sealed class HttpDownloadTransferService
         };
 
     private readonly HttpClient _httpClient;
+    private readonly IReadOnlyList<IHostFileResolver> _resolvers;
 
-    public HttpDownloadTransferService(HttpClient httpClient)
+    public HttpDownloadTransferService(
+        HttpClient httpClient,
+        IEnumerable<IHostFileResolver>? resolvers = null)
     {
         _httpClient =
             httpClient ??
             throw new ArgumentNullException(nameof(httpClient));
+
+        _resolvers = resolvers?.ToArray() ??
+            Array.Empty<IHostFileResolver>();
     }
 
     public async Task<DownloadTransferResult> DownloadAsync(
@@ -57,6 +64,33 @@ public sealed class HttpDownloadTransferService
         ArgumentNullException.ThrowIfNull(request);
 
         Uri source = ValidateSource(request.Source);
+        string? suggestedFileName = null;
+        long? advertisedTotalBytes = null;
+        bool preferSuggestedName = false;
+
+        // Host pages (/u/ID) become direct downloads first.
+        // Resolver failures are typed (challenge/quota/unreachable)
+        // and propagate — the item stays queued for solve or retry.
+        foreach (IHostFileResolver resolver in _resolvers)
+        {
+            if (!resolver.CanResolve(source))
+            {
+                continue;
+            }
+
+            ResolvedHostFile resolved =
+                await resolver.ResolveAsync(
+                        source,
+                        _httpClient,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+            source = resolved.DownloadUri;
+            suggestedFileName = resolved.SuggestedFileName;
+            advertisedTotalBytes = resolved.TotalBytes;
+            preferSuggestedName = true;
+            break;
+        }
 
         string destinationDirectory =
             ValidateDestinationDirectory(
@@ -81,7 +115,7 @@ public sealed class HttpDownloadTransferService
         // A `continue` never triggers that cleanup.
         string? pendingTemporaryPath = temporaryPath;
         long bytesWritten = 0;
-        long? totalBytes = null;
+        long? totalBytes = advertisedTotalBytes;
         string? fileName = null;
 
         try
@@ -240,7 +274,9 @@ public sealed class HttpDownloadTransferService
                     fileName =
                         ResolveSafeFileName(
                             content.Headers,
-                            fileNameSource);
+                            fileNameSource,
+                            suggestedFileName,
+                            preferSuggestedName);
                 }
 
                 byte[] buffer =
@@ -643,7 +679,9 @@ public sealed class HttpDownloadTransferService
 
     private static string ResolveSafeFileName(
         HttpContentHeaders headers,
-        Uri source)
+        Uri source,
+        string? suggestedFileName = null,
+        bool preferSuggestedName = false)
     {
         string? dispositionName =
             GetContentDispositionFileName(headers);
@@ -658,8 +696,23 @@ public sealed class HttpDownloadTransferService
 
         string? urlName = GetUrlFileName(source);
         string? safeUrlName = SanitizeFileName(urlName);
+        string? safeSuggested = SanitizeFileName(suggestedFileName);
 
-        return safeUrlName ?? "download";
+        // Host-advertised names (Pixeldrain info) beat the URL
+        // when a resolver engaged: endpoint paths carry IDs, not
+        // names. Server headers always stay authoritative, and the
+        // suggestion passes through the same sanitizer.
+        if (preferSuggestedName && safeSuggested is not null)
+        {
+            return safeSuggested;
+        }
+
+        if (safeUrlName is not null)
+        {
+            return safeUrlName;
+        }
+
+        return safeSuggested ?? "download";
     }
 
     private static string? GetContentDispositionFileName(

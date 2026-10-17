@@ -69,7 +69,7 @@ public sealed class ChallengeDetectorTests
     }
 
     [Fact]
-    public void Detect_Pixeldrain403_IsAlwaysQuotaWall()
+    public void Detect_Pixeldrain403_PlainBody_IsQuotaWall()
     {
         // Pixeldrain quota exhaustion must never open a browser:
         // solving cannot help, only waiting or Premium.
@@ -80,14 +80,22 @@ public sealed class ChallengeDetectorTests
                 "application/json",
                 "{\"success\":false}",
                 "pixeldrain.com"));
+    }
 
+    [Fact]
+    public void Detect_Pixeldrain403_CaptchaMarkers_IsSolvable()
+    {
+        // Pixeldrain's hotlink/file-rate-limit CAPTCHAs arrive as
+        // 403 with captcha-named errors (per its API docs) — this
+        // flavor IS solvable via the solve window.
         Assert.Equal(
-            ChallengeKind.QuotaWall,
+            ChallengeKind.Captcha,
             ChallengeDetector.Detect(
                 HttpStatusCode.Forbidden,
-                "text/html",
-                "<div class=\"g-recaptcha\"></div>",
-                "dl.pixeldrain.com"));
+                "application/json",
+                "{\"success\":false," +
+                "\"value\":\"file_rate_limited_captcha_required\"}",
+                "pixeldrain.com"));
     }
 
     [Fact]
