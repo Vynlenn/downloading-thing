@@ -769,6 +769,30 @@
                             </StackPanel>
                         </Border>
 
+                        <TextBlock Text="Download history"
+                                   FontSize="18"
+                                   FontWeight="SemiBold" />
+
+                        <Border Margin="0,14,0,24"
+                                Padding="20"
+                                CornerRadius="10"
+                                Background="{DynamicResource SurfaceBrush}"
+                                BorderBrush="{DynamicResource BorderBrush}"
+                                BorderThickness="1">
+                            <StackPanel>
+                                <TextBlock x:Name="HistoryStatusText"
+                                           Foreground="{DynamicResource MutedTextBrush}"
+                                           TextWrapping="Wrap"
+                                           Text="No finished downloads remembered yet." />
+                                <Button x:Name="ClearHistoryButton"
+                                        Content="Forget download history"
+                                        Margin="0,12,0,0"
+                                        Padding="12,6"
+                                        HorizontalAlignment="Left"
+                                        Click="ClearHistory_Click" />
+                            </StackPanel>
+                        </Border>
+
                         <Button Content="Save settings"
                                 Width="150"
                                 HorizontalAlignment="Left"

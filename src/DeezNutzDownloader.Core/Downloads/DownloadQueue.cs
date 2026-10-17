@@ -261,7 +261,8 @@ public sealed class DownloadQueue
     }
 
     public DownloadQueueImportResult Enqueue(
-        LinkAnalysisResult analysis)
+        LinkAnalysisResult analysis,
+        Func<string, bool>? alreadyHave = null)
     {
         ArgumentNullException.ThrowIfNull(analysis);
 
@@ -294,11 +295,15 @@ public sealed class DownloadQueue
                 string normalizedUrl =
                     candidate.NormalizedUrl;
 
-                if (!_queuedUrls.Add(normalizedUrl))
+                if (
+                    _queuedUrls.Contains(normalizedUrl) ||
+                    alreadyHave?.Invoke(normalizedUrl) == true)
                 {
                     alreadyQueuedCount++;
                     continue;
                 }
+
+                _queuedUrls.Add(normalizedUrl);
 
                 _items.Add(
                     new DownloadQueueItem(
@@ -327,7 +332,8 @@ public sealed class DownloadQueue
 
     public DownloadQueueImportResult EnqueuePackages(
         IReadOnlyList<LinkPackage> packages,
-        bool organizeIntoSiteFolders)
+        bool organizeIntoSiteFolders,
+        Func<string, bool>? alreadyHave = null)
     {
         ArgumentNullException.ThrowIfNull(packages);
 
@@ -368,11 +374,15 @@ public sealed class DownloadQueue
                     string normalizedUrl =
                         candidate.NormalizedUrl;
 
-                    if (!_queuedUrls.Add(normalizedUrl))
+                    if (
+                        _queuedUrls.Contains(normalizedUrl) ||
+                        alreadyHave?.Invoke(normalizedUrl) == true)
                     {
                         alreadyQueuedCount++;
                         continue;
                     }
+
+                    _queuedUrls.Add(normalizedUrl);
 
                     _items.Add(
                         new DownloadQueueItem(
