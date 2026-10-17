@@ -463,15 +463,28 @@ public partial class MainWindow : Window
                         proxyUrl,
                         browserCookies));
 
-            LinkGrabberStatusText.Text = probe.IsPlaylist
-                ? $"Found: {probe.Summary}. Playlists currently " +
-                    "grab the single video, not every item. " +
-                    "Downloading…"
-                : $"Found: {probe.Summary}. " +
-                    "Downloading best quality…";
+            var formatDialog = new VideoFormatDialog(probe)
+            {
+                Owner = this
+            };
+
+            if (formatDialog.ShowDialog() != true)
+            {
+                LinkGrabberStatusText.Text =
+                    "Video grab canceled — nothing was downloaded.";
+
+                return;
+            }
+
+            string? formatId = formatDialog.SelectedFormatId;
+            bool grabPlaylist = formatDialog.DownloadPlaylist;
+
+            LinkGrabberStatusText.Text = grabPlaylist
+                ? $"Downloading playlist: {probe.Title}…"
+                : $"Downloading{(formatId is null ? " best quality" : " selected format")}: {probe.Title}…";
 
             ApplicationStatusText.Text =
-                $"Video probe complete - {probe.Title}";
+                $"Video download started - {probe.Title}";
 
             var progress = new Progress<string>(line =>
             {
@@ -492,14 +505,15 @@ public partial class MainWindow : Window
                 await Task.Run(
                     () => media.DownloadAsync(
                         videoUrl,
-                        formatId: null,
+                        formatId,
                         _settings.DownloadFolder,
                         ytDlpPath,
                         ffmpegPath,
                         progress,
                         CancellationToken.None,
                         proxyUrl,
-                        browserCookies));
+                        browserCookies,
+                        grabPlaylist));
 
             _history.Record(
                 new DownloadHistoryEntry(

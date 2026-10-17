@@ -56,7 +56,8 @@ public interface IYtDlpMediaService
         IProgress<string>? log = null,
         CancellationToken cancellationToken = default,
         string? proxyUrl = null,
-        string? cookiesFromBrowser = null);
+        string? cookiesFromBrowser = null,
+        bool downloadPlaylist = false);
 }
 
 public static class YtDlpProbeParser
@@ -330,7 +331,9 @@ public static class YtDlpArgumentBuilder
         var arguments = new List<string>
         {
             "--dump-single-json",
-            "--no-playlist",
+            // Flat playlists stay cheap: single videos return
+            // their formats, playlist URLs return entries.
+            "--flat-playlist",
             "--no-warnings",
             "--socket-timeout", "15",
         };
@@ -347,11 +350,12 @@ public static class YtDlpArgumentBuilder
         string outputTemplate,
         string ffmpegPath,
         string? proxyUrl = null,
-        string? cookiesFromBrowser = null)
+        string? cookiesFromBrowser = null,
+        bool downloadPlaylist = false)
     {
         var arguments = new List<string>
         {
-            "--no-playlist",
+            downloadPlaylist ? "--yes-playlist" : "--no-playlist",
             "--no-warnings",
             "--newline",
             "--print", "after_move:filepath",
@@ -537,7 +541,8 @@ public sealed class YtDlpMediaService : IYtDlpMediaService
         IProgress<string>? log = null,
         CancellationToken cancellationToken = default,
         string? proxyUrl = null,
-        string? cookiesFromBrowser = null)
+        string? cookiesFromBrowser = null,
+        bool downloadPlaylist = false)
     {
         Uri source = ValidateUrl(url);
 
@@ -573,7 +578,8 @@ public sealed class YtDlpMediaService : IYtDlpMediaService
                 template,
                 ffmpegPath,
                 proxyUrl,
-                cookiesFromBrowser);
+                cookiesFromBrowser,
+                downloadPlaylist);
 
         ProcessResult result;
         try
@@ -602,6 +608,13 @@ public sealed class YtDlpMediaService : IYtDlpMediaService
                 "It may need Premium/login, be geo-blocked, or " +
                 "be DRM-protected (not supported). " +
                 TrimTail(result.StandardError));
+        }
+
+        // Playlist runs print one path per video; the folder is
+        // the honest result.
+        if (downloadPlaylist)
+        {
+            return fullDestination;
         }
 
         string? finalPath = result.StandardOutput
