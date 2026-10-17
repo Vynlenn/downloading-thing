@@ -136,14 +136,25 @@
                                     Style="{StaticResource SecondaryButtonStyle}"
                                     Click="ClearDownloadQueue_Click" />
 
-                            <Button Content="Start all"
+                            <Button x:Name="ClearFinishedDownloadsButton"
+                                    Content="Clear finished"
                                     Margin="0,0,8,0"
                                     IsEnabled="False"
-                                    Style="{StaticResource PrimaryButtonStyle}" />
+                                    Style="{StaticResource SecondaryButtonStyle}"
+                                    Click="ClearFinishedDownloads_Click" />
 
-                            <Button Content="Pause all"
+                            <Button x:Name="StartAllDownloadsButton"
+                                    Content="Start all"
+                                    Margin="0,0,8,0"
                                     IsEnabled="False"
-                                    Style="{StaticResource SecondaryButtonStyle}" />
+                                    Style="{StaticResource PrimaryButtonStyle}"
+                                    Click="StartAllDownloads_Click" />
+
+                            <Button x:Name="CancelAllDownloadsButton"
+                                    Content="Cancel all"
+                                    IsEnabled="False"
+                                    Style="{StaticResource SecondaryButtonStyle}"
+                                    Click="CancelAllDownloads_Click" />
                         </StackPanel>
                     </Grid>
 
@@ -166,7 +177,7 @@
                                            FontWeight="SemiBold" />
 
                                 <TextBlock Margin="0,8,0,18"
-                                           Text="Analyze links and add the valid results to this local queue. No network requests are made at this checkpoint."
+                                           Text="Analyze links, add the valid results to this queue, then start the batch when you are ready."
                                            TextAlignment="Center"
                                            TextWrapping="Wrap"
                                            Foreground="{DynamicResource MutedTextBrush}" />
@@ -184,7 +195,7 @@
                                     <RowDefinition Height="*" />
                                 </Grid.RowDefinitions>
 
-                                <TextBlock Text="Items are queued locally. The download engine is not connected yet."
+                                <TextBlock Text="Downloads use the saved destination and network settings. Failed or canceled items can be started again."
                                            Foreground="{DynamicResource MutedTextBrush}"
                                            TextWrapping="Wrap" />
 
@@ -214,15 +225,76 @@
                                                         </Grid.ColumnDefinitions>
 
                                                         <StackPanel>
-                                                            <TextBlock Text="{Binding DisplayName}"
+                                                            <TextBlock Text="{Binding EffectiveDisplayName}"
                                                                        FontWeight="SemiBold"
                                                                        FontSize="15"
                                                                        TextWrapping="Wrap" />
+
+                                                            <TextBlock Margin="0,2,0,0"
+                                                                       Text="{Binding PackageName, StringFormat='Package · {0}'}"
+                                                                       Foreground="{DynamicResource AccentTextBrush}"
+                                                                       FontSize="12"
+                                                                       TextWrapping="Wrap">
+                                                                <TextBlock.Style>
+                                                                    <Style TargetType="TextBlock">
+                                                                        <Style.Triggers>
+                                                                            <DataTrigger Binding="{Binding PackageName}"
+                                                                                         Value="{x:Null}">
+                                                                                <Setter Property="Visibility"
+                                                                                        Value="Collapsed" />
+                                                                            </DataTrigger>
+                                                                            <DataTrigger Binding="{Binding PackageName}"
+                                                                                         Value="">
+                                                                                <Setter Property="Visibility"
+                                                                                        Value="Collapsed" />
+                                                                            </DataTrigger>
+                                                                        </Style.Triggers>
+                                                                    </Style>
+                                                                </TextBlock.Style>
+                                                            </TextBlock>
 
                                                             <TextBlock Margin="0,5,0,0"
                                                                        Text="{Binding Url}"
                                                                        Foreground="{DynamicResource MutedTextBrush}"
                                                                        TextWrapping="Wrap" />
+
+                                                            <ProgressBar Margin="0,11,0,0"
+                                                                         Height="7"
+                                                                         Minimum="0"
+                                                                         Maximum="100"
+                                                                         Value="{Binding ProgressPercentage}"
+                                                                         IsIndeterminate="{Binding IsIndeterminate}"
+                                                                         Foreground="{DynamicResource AccentBrush}"
+                                                                         Background="{DynamicResource AppBackgroundBrush}"
+                                                                         BorderThickness="0" />
+
+                                                            <TextBlock Margin="0,6,0,0"
+                                                                       Text="{Binding ProgressText}"
+                                                                       Foreground="{DynamicResource MutedTextBrush}"
+                                                                       TextWrapping="Wrap" />
+
+                                                            <TextBlock Margin="0,5,0,0"
+                                                                       Text="{Binding ErrorMessage}"
+                                                                       TextWrapping="Wrap">
+                                                                <TextBlock.Style>
+                                                                    <Style TargetType="TextBlock">
+                                                                        <Setter Property="Foreground"
+                                                                                Value="{DynamicResource ErrorBrush}" />
+                                                                        <Style.Triggers>
+                                                                            <DataTrigger Binding="{Binding ErrorMessage}"
+                                                                                         Value="{x:Null}">
+                                                                                <Setter Property="Visibility"
+                                                                                        Value="Collapsed" />
+                                                                            </DataTrigger>
+                                                                            <DataTrigger Binding="{Binding ErrorMessage}"
+                                                                                         Value="">
+                                                                                <Setter Property="Visibility"
+                                                                                        Value="Collapsed" />
+                                                                            </DataTrigger>
+                                                                        </Style.Triggers>
+                                                                    </Style>
+                                                                </TextBlock.Style>
+                                                            </TextBlock>
                                                         </StackPanel>
 
                                                         <StackPanel Grid.Column="1"
@@ -238,8 +310,16 @@
                                                                            FontWeight="SemiBold" />
                                                             </Border>
 
+                                                            <Button Content="Retry"
+                                                                    Tag="{Binding Id}"
+                                                                    IsEnabled="{Binding CanRetry}"
+                                                                    Margin="0,0,8,0"
+                                                                    Style="{StaticResource SecondaryButtonStyle}"
+                                                                    Click="RetryQueuedItem_Click" />
+
                                                             <Button Content="Remove"
                                                                     Tag="{Binding Id}"
+                                                                    IsEnabled="{Binding CanRemove}"
                                                                     Style="{StaticResource SecondaryButtonStyle}"
                                                                     Click="RemoveQueuedItem_Click" />
                                                         </StackPanel>
@@ -304,6 +384,20 @@
                                         Style="{StaticResource SecondaryButtonStyle}"
                                         Click="AnalyzeLinks_Click" />
 
+                                <Button x:Name="GrabVideoButton"
+                                        Content="Grab video"
+                                        Margin="0,0,8,0"
+                                        Style="{StaticResource SecondaryButtonStyle}"
+                                        ToolTip="Probe one video page with yt-dlp and download the best quality."
+                                        Click="GrabVideo_Click" />
+
+                                <Button x:Name="CrawlPageButton"
+                                        Content="Crawl page"
+                                        Margin="0,0,8,0"
+                                        Style="{StaticResource SecondaryButtonStyle}"
+                                        ToolTip="Fetch one page and pull out its file-host links, skipping avatars, logos, and navigation."
+                                        Click="CrawlPage_Click" />
+
                                 <Button x:Name="QueueValidLinksButton"
                                         Content="Add valid to queue"
                                         IsEnabled="False"
@@ -357,12 +451,21 @@
                                 </StackPanel>
                             </Grid>
 
-                            <TextBlock x:Name="LinkGrabberStatusText"
-                                       Grid.Row="1"
-                                       Margin="0,6,0,14"
-                                       Text="Paste links above to analyze them locally."
-                                       Foreground="{DynamicResource MutedTextBrush}"
-                                       TextWrapping="Wrap" />
+                            <StackPanel Grid.Row="1"
+                                        Margin="0,6,0,14">
+                                <TextBlock x:Name="LinkGrabberStatusText"
+                                           Text="Paste links above to analyze them locally."
+                                           Foreground="{DynamicResource MutedTextBrush}"
+                                           TextWrapping="Wrap" />
+
+                                <TextBlock x:Name="PackageSummaryText"
+                                           Margin="0,4,0,0"
+                                           Text=""
+                                           Foreground="{DynamicResource AccentTextBrush}"
+                                           FontWeight="SemiBold"
+                                           TextWrapping="Wrap"
+                                           Visibility="Collapsed" />
+                            </StackPanel>
 
                             <ScrollViewer Grid.Row="2"
                                           VerticalScrollBarVisibility="Auto">
@@ -458,6 +561,25 @@
                                 </Grid>
 
                                 <TextBlock Margin="0,18,0,6"
+                                           Text="Concurrent downloads"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Margin="0,0,0,6"
+                                           Text="How many files download at once (1 to 64). Applies to the next batch."
+                                           Foreground="{DynamicResource MutedTextBrush}"
+                                           TextWrapping="Wrap" />
+                                <TextBox x:Name="ConcurrencyTextBox"
+                                         Width="120"
+                                         HorizontalAlignment="Left" />
+
+                                <CheckBox x:Name="OrganizeFoldersCheckBox"
+                                          Margin="0,14,0,0"
+                                          Content="Organize downloads into site subfolders" />
+
+                                <CheckBox x:Name="ClipboardWatchCheckBox"
+                                          Margin="0,8,0,0"
+                                          Content="Watch clipboard for new links" />
+
+                                <TextBlock Margin="0,18,0,6"
                                            Text="Theme"
                                            FontWeight="SemiBold" />
                                 <ComboBox x:Name="ThemeComboBox"
@@ -488,7 +610,7 @@
                                 <TextBlock Text="Connection mode"
                                            FontWeight="SemiBold" />
                                 <TextBlock Margin="0,3,0,8"
-                                           Text="Windows settings is the recommended default. Manual proxy information is saved now but will not be used until the download engine is connected."
+                                           Text="Windows settings is the recommended default. Saved connection settings are applied at the start of each new download batch."
                                            Foreground="{DynamicResource MutedTextBrush}"
                                            TextWrapping="Wrap" />
 
@@ -514,6 +636,9 @@
                                         <RowDefinition Height="Auto" />
                                         <RowDefinition Height="Auto" />
                                         <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
                                     </Grid.RowDefinitions>
 
                                     <TextBlock Grid.Row="0"
@@ -523,7 +648,8 @@
                                               Grid.Row="0"
                                               Grid.Column="1"
                                               Width="180"
-                                              HorizontalAlignment="Left">
+                                              HorizontalAlignment="Left"
+                                              SelectionChanged="ProxyTypeComboBox_SelectionChanged">
                                         <ComboBoxItem Content="HTTP"
                                                       Tag="Http" />
                                         <ComboBoxItem Content="HTTPS"
@@ -553,7 +679,61 @@
                                              Width="120"
                                              Margin="0,12,0,0"
                                              HorizontalAlignment="Left" />
+
+                                    <TextBlock Grid.Row="3"
+                                               Margin="0,12,0,0"
+                                               VerticalAlignment="Center"
+                                               Text="Username" />
+                                    <TextBox x:Name="ProxyUsernameTextBox"
+                                             Grid.Row="3"
+                                             Grid.Column="1"
+                                             Margin="0,12,0,0"
+                                             ToolTip="Leave empty when the proxy needs no login." />
+
+                                    <TextBlock Grid.Row="4"
+                                               Margin="0,12,0,0"
+                                               VerticalAlignment="Center"
+                                               Text="Password" />
+                                    <PasswordBox x:Name="ProxyPasswordBox"
+                                                 Grid.Row="4"
+                                                 Grid.Column="1"
+                                                 Margin="0,12,0,0"
+                                                 ToolTip="Stored encrypted (Windows DPAPI). Leave empty to keep the saved one." />
+
+                                    <TextBlock x:Name="ProxySocksWarningText"
+                                               Grid.Row="5"
+                                               Grid.ColumnSpan="2"
+                                               Margin="0,10,0,0"
+                                               Foreground="{DynamicResource ErrorBrush}"
+                                               TextWrapping="Wrap"
+                                               Visibility="Collapsed"
+                                               Text="SOCKS proxies are not supported in this version. Choose HTTP or HTTPS." />
                                 </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock Text="Media tools (yt-dlp)"
+                                   FontSize="18"
+                                   FontWeight="SemiBold" />
+
+                        <Border Margin="0,14,0,24"
+                                Padding="20"
+                                CornerRadius="10"
+                                Background="{DynamicResource SurfaceBrush}"
+                                BorderBrush="{DynamicResource BorderBrush}"
+                                BorderThickness="1">
+                            <StackPanel>
+                                <TextBlock Text="Video grabs use the yt-dlp and FFmpeg programs installed on this PC. Leave a field empty to use the program found on PATH. Paste a video page in LinkGrabber and use Grab video."
+                                           Foreground="{DynamicResource MutedTextBrush}"
+                                           TextWrapping="Wrap" />
+                                <TextBlock Margin="0,12,0,6"
+                                           Text="yt-dlp path (optional)"
+                                           FontWeight="SemiBold" />
+                                <TextBox x:Name="YtDlpPathTextBox" />
+                                <TextBlock Margin="0,12,0,6"
+                                           Text="FFmpeg path (optional)"
+                                           FontWeight="SemiBold" />
+                                <TextBox x:Name="FFmpegPathTextBox" />
                             </StackPanel>
                         </Border>
 

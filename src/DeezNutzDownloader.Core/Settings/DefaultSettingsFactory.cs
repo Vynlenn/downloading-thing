@@ -19,13 +19,6 @@ public static class DefaultSettingsFactory
 
     public static string GetDefaultDownloadFolder()
     {
-        const string preferredParent = @"E:\Downloads\AI";
-
-        if (Directory.Exists(preferredParent))
-        {
-            return Path.Combine(preferredParent, "DeezNutzDownloader-Downloads");
-        }
-
         string userProfile = Environment.GetFolderPath(
             Environment.SpecialFolder.UserProfile);
 

@@ -48,6 +48,21 @@ public sealed class SettingsStore
 
             bool settingsChanged = false;
 
+            if (
+                settings.MaximumConcurrentDownloads is < 1 or
+                > 64
+            )
+            {
+                settings.MaximumConcurrentDownloads = 3;
+                settingsChanged = true;
+            }
+
+            if (settings.ProxyPort is < 1 or > 65535)
+            {
+                settings.ProxyPort = 8080;
+                settingsChanged = true;
+            }
+
             if (string.IsNullOrWhiteSpace(settings.DownloadFolder))
             {
                 settings.DownloadFolder =

@@ -29,6 +29,7 @@ public sealed class AppPaths
         }
 
         SettingsFile = Path.Combine(DataDirectory, "settings.json");
+        DownloadQueueFile = Path.Combine(DataDirectory, "download-queue.json");
         LogsDirectory = Path.Combine(DataDirectory, "logs");
     }
 
@@ -41,6 +42,8 @@ public sealed class AppPaths
     public string DataDirectory { get; }
 
     public string SettingsFile { get; }
+
+    public string DownloadQueueFile { get; }
 
     public string LogsDirectory { get; }
 
