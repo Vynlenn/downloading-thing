@@ -117,6 +117,17 @@ public sealed class SettingsStore
                 settingsChanged = true;
             }
 
+            // Version 6 introduces GitHub update checks (off
+            // until a repository is configured).
+            if (settings.ConfigurationVersion < 6)
+            {
+                settings.ConfigurationVersion = 6;
+                settings.UpdateRepository ??= string.Empty;
+                settingsChanged = true;
+            }
+
+            settings.UpdateRepository ??= string.Empty;
+
             if (settingsChanged)
             {
                 await SaveAsync(settings);

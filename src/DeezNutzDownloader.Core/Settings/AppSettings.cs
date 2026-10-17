@@ -24,7 +24,7 @@ public enum ProxyType
 
 public sealed class AppSettings
 {
-    public int ConfigurationVersion { get; set; } = 5;
+    public int ConfigurationVersion { get; set; } = 6;
 
     public string DownloadFolder { get; set; } = string.Empty;
 
@@ -91,4 +91,12 @@ public sealed class AppSettings
 
     /// <summary>Capped rate inside quiet hours (KB/s).</summary>
     public int QuietHoursCapKBps { get; set; } = 512;
+
+    /// <summary>
+    /// GitHub repository (owner/name) used for update checks.
+    /// Empty disables update checks.
+    /// </summary>
+    public string UpdateRepository { get; set; } = string.Empty;
+
+    public bool CheckForUpdatesOnStartup { get; set; } = true;
 }
