@@ -9,9 +9,11 @@ using DeezNutzDownloader.Adapters.Http;
 using DeezNutzDownloader.Adapters.Media;
 using DeezNutzDownloader.App.Networking;
 using DeezNutzDownloader.App.Theming;
+using DeezNutzDownloader.Core.Challenges;
 using DeezNutzDownloader.Core.Downloads;
 using DeezNutzDownloader.Core.Links;
 using DeezNutzDownloader.Core.Settings;
+using DeezNutzDownloader.Infrastructure.Challenges;
 using DeezNutzDownloader.Infrastructure.Configuration;
 using DeezNutzDownloader.Infrastructure.Downloads;
 using DeezNutzDownloader.Infrastructure.Logging;
@@ -29,6 +31,7 @@ public partial class MainWindow : Window
     private readonly LocalLog _log;
     private readonly DownloadQueue _downloadQueue = new();
     private readonly DownloadQueueStore _queueStore;
+    private readonly ChallengeSessionStore _challengeStore;
     private readonly SemaphoreSlim _queuePersistGate = new(1, 1);
     private DateTimeOffset _lastQueuePersistUtc =
         DateTimeOffset.MinValue;
@@ -60,6 +63,7 @@ public partial class MainWindow : Window
         _paths = paths;
         _log = log;
         _queueStore = new DownloadQueueStore(paths);
+        _challengeStore = new ChallengeSessionStore(paths);
 
         InitializeComponent();
 
@@ -255,13 +259,24 @@ public partial class MainWindow : Window
             LinkGrabberStatusText.Text =
                 "Fetching the page and filtering its links…";
 
-            using HttpClient client =
-                DownloadHttpClientFactory.Create(_settings);
+            PageExtractionResult result;
 
-            var crawler = new PageLinkCrawler(client);
+            try
+            {
+                result = await FetchAndExtractAsync(uri);
+            }
+            catch (ChallengeDetectedException challenge)
+                when (challenge.IsSolvableInBrowser)
+            {
+                // One solve, one retry: the fresh cookies replay
+                // through the same factory-built client.
+                if (!await SolveChallengeAsync(challenge))
+                {
+                    throw;
+                }
 
-            PageExtractionResult result =
-                await crawler.ExtractFromPageAsync(uri.AbsoluteUri);
+                result = await FetchAndExtractAsync(uri);
+            }
 
             if (result.Files.Count == 0)
             {
@@ -799,6 +814,9 @@ public partial class MainWindow : Window
 
         HttpClient? httpClient = null;
         DownloadOrchestrator? orchestrator = null;
+        var batchChallenges =
+            new List<ChallengeDetectedException>();
+        bool restartAfterSolve = false;
 
         try
         {
@@ -838,7 +856,9 @@ public partial class MainWindow : Window
             }
 
             httpClient =
-                DownloadHttpClientFactory.Create(_settings);
+                DownloadHttpClientFactory.Create(
+                    _settings,
+                    _challengeStore);
 
             orchestrator =
                 new DownloadOrchestrator(
@@ -852,6 +872,17 @@ public partial class MainWindow : Window
 
             orchestrator.RunningStateChanged +=
                 DownloadOrchestrator_RunningStateChanged;
+
+            EventHandler<ChallengeDetectedException>
+                challengeHandler = (_, challenge) =>
+                {
+                    lock (batchChallenges)
+                    {
+                        batchChallenges.Add(challenge);
+                    }
+                };
+
+            orchestrator.ChallengeBlocked += challengeHandler;
 
             ApplicationStatusText.Text =
                 $"Starting {startableItems.Length} download" +
@@ -867,8 +898,16 @@ public partial class MainWindow : Window
 
             RefreshDownloadQueue();
 
-            DownloadBatchResult result =
-                await batchTask;
+            DownloadBatchResult result;
+
+            try
+            {
+                result = await batchTask;
+            }
+            finally
+            {
+                orchestrator.ChallengeBlocked -= challengeHandler;
+            }
 
             if (!_isClosing)
             {
@@ -883,6 +922,9 @@ public partial class MainWindow : Window
                     $"failed: {result.FailedCount}; " +
                     $"canceled: {result.CanceledCount}; " +
                     $"not started: {result.NotStartedCount}.");
+
+                restartAfterSolve =
+                    await OfferChallengeSolvesAsync(batchChallenges);
             }
         }
         catch (Exception exception)
@@ -942,6 +984,154 @@ public partial class MainWindow : Window
                 RefreshDownloadQueue();
             }
         }
+
+        if (restartAfterSolve && !_isClosing)
+        {
+            StartAllDownloads_Click(sender, e);
+        }
+    }
+
+    /// <summary>
+    /// Offers the solve window once per challenged host. Solved
+    /// hosts get their failed items requeued; returns true when a
+    /// solve landed and the batch should restart on its own.
+    /// </summary>
+    private async Task<bool> OfferChallengeSolvesAsync(
+        List<ChallengeDetectedException> batchChallenges)
+    {
+        List<ChallengeDetectedException> distinct;
+
+        lock (batchChallenges)
+        {
+            distinct = batchChallenges
+                .GroupBy(challenge => challenge.Host.ToLowerInvariant())
+                .Select(group => group.First())
+                .ToList();
+        }
+
+        bool anySolved = false;
+
+        foreach (ChallengeDetectedException challenge in distinct)
+        {
+            if (_isClosing)
+            {
+                break;
+            }
+
+            if (!challenge.IsSolvableInBrowser)
+            {
+                continue;
+            }
+
+            MessageBoxResult answer = MessageBox.Show(
+                this,
+                challenge.Message + " Solve it now in the app browser?",
+                $"{challenge.Host} needs a check",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+
+            if (answer != MessageBoxResult.Yes)
+            {
+                continue;
+            }
+
+            var solveWindow = new ChallengeSolveWindow(
+                challenge.PageUrl,
+                challenge.Host,
+                _challengeStore)
+            {
+                Owner = this
+            };
+
+            bool? solved = solveWindow.ShowDialog();
+
+            if (solved != true || !solveWindow.SessionSaved)
+            {
+                continue;
+            }
+
+            await _log.InformationAsync(
+                $"Challenge solved for {challenge.Host} " +
+                $"({solveWindow.SavedCookieCount} cookies). " +
+                "Requeuing blocked items.");
+
+            RequeueHostFailures(challenge.Host);
+            anySolved = true;
+        }
+
+        return anySolved;
+    }
+
+    private async Task<PageExtractionResult> FetchAndExtractAsync(
+        Uri page)
+    {
+        using HttpClient client =
+            DownloadHttpClientFactory.Create(
+                _settings,
+                _challengeStore);
+
+        var crawler = new PageLinkCrawler(client);
+
+        return await crawler.ExtractFromPageAsync(page.AbsoluteUri);
+    }
+
+    /// <summary>
+    /// Prompts for and runs the solve window. Returns true when a
+    /// session was saved and the caller should retry once.
+    /// </summary>
+    private async Task<bool> SolveChallengeAsync(
+        ChallengeDetectedException challenge)
+    {
+        // Kept async for symmetry with the batch flow; the dialog
+        // itself is synchronous.
+        await Task.CompletedTask;
+
+        MessageBoxResult answer = MessageBox.Show(
+            this,
+            challenge.Message + " Solve it now in the app browser?",
+            $"{challenge.Host} needs a check",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Question);
+
+        if (answer != MessageBoxResult.Yes)
+        {
+            return false;
+        }
+
+        var solveWindow = new ChallengeSolveWindow(
+            challenge.PageUrl,
+            challenge.Host,
+            _challengeStore)
+        {
+            Owner = this
+        };
+
+        return solveWindow.ShowDialog() == true &&
+            solveWindow.SessionSaved;
+    }
+
+    private void RequeueHostFailures(string host)
+    {
+        foreach (DownloadQueueItem item in _downloadQueue.Items)
+        {
+            if (
+                item.State !=
+                    DownloadQueueItemState.Failed ||
+                !Uri.TryCreate(
+                    item.Url,
+                    UriKind.Absolute,
+                    out Uri? uri) ||
+                !uri.Host.Equals(
+                    host,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            _downloadQueue.TryResetForRetry(item.Id);
+        }
+
+        RefreshDownloadQueue();
     }
 
     private void CancelAllDownloads_Click(

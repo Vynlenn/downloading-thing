@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using DeezNutzDownloader.Core.Challenges;
 
 namespace DeezNutzDownloader.Core.Downloads;
 
@@ -38,6 +39,15 @@ public sealed class DownloadOrchestrator : IDisposable
     }
 
     public event EventHandler? RunningStateChanged;
+
+    /// <summary>
+    /// Raised (on a worker thread) when an item fails on a typed
+    /// host challenge. The item is still marked failed with a
+    /// friendly message; subscribers collect these and offer the
+    /// solve window once per host after the batch.
+    /// </summary>
+    public event EventHandler<ChallengeDetectedException>?
+        ChallengeBlocked;
 
     public bool IsRunning
     {
@@ -320,9 +330,29 @@ public sealed class DownloadOrchestrator : IDisposable
 
                 Interlocked.Increment(
                     ref state.FailedCount);
+
+                if (
+                    exception is
+                        ChallengeDetectedException challenge)
+                {
+                    RaiseChallengeBlocked(challenge);
+                }
             }
 
             hostGate?.Release();
+        }
+    }
+
+    private void RaiseChallengeBlocked(
+        ChallengeDetectedException challenge)
+    {
+        try
+        {
+            ChallengeBlocked?.Invoke(this, challenge);
+        }
+        catch
+        {
+            // UI subscribers must never break a batch.
         }
     }
 
