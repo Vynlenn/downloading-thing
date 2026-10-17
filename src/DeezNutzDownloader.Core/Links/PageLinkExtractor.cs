@@ -74,8 +74,10 @@ public static partial class PageLinkExtractor
         "pinterest.com/pin/create",
     };
 
+    // The full opening tag is matched (through the closing >)
+    // so rel="next" is found wherever it sits in the anchor.
     [GeneratedRegex(
-        """<a\b(?<tag>[^>]*?)\bhref\s*=\s*["'](?<url>[^"'<>]+)["']""",
+        """<a\b[^>]*?\bhref\s*=\s*["'](?<url>[^"'<>]+)["'][^>]*>""",
         RegexOptions.IgnoreCase | RegexOptions.Singleline,
         matchTimeoutMilliseconds: 2000)]
     private static partial Regex AnchorHrefRegex();
@@ -135,7 +137,7 @@ public static partial class PageLinkExtractor
                 nextPage is null &&
                 IsNextPageLink(
                     normalized,
-                    match.Groups["tag"].Value,
+                    match.Value,
                     page))
             {
                 nextPage = normalized;

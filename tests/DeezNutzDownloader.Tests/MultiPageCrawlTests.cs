@@ -72,6 +72,23 @@ public sealed class PaginationDetectionTests
     }
 
     [Fact]
+    public void IsNextPageLink_RelAfterHref_Wins()
+    {
+        const string html =
+            "<html><body>" +
+            "<a href=\"/gallery/2\" rel=\"next\">next</a>" +
+            "</body></html>";
+
+        PageExtractionResult result = PageLinkExtractor.Extract(
+            html,
+            "https://forum.test/gallery/1");
+
+        Assert.Equal(
+            "https://forum.test/gallery/2",
+            result.NextPageUrl);
+    }
+
+    [Fact]
     public void Extract_SurfacesNextPageUrl()
     {
         const string html =

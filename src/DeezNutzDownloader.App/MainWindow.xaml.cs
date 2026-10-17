@@ -927,7 +927,8 @@ public partial class MainWindow : Window
                         new IHostFileResolver[]
                         {
                             new PixeldrainResolver(),
-                            new GofileResolver()
+                            new GofileResolver(),
+                            new MediaFireResolver()
                         }));
 
             _activeDownloadHttpClient = httpClient;
