@@ -57,7 +57,8 @@ public interface IYtDlpMediaService
         CancellationToken cancellationToken = default,
         string? proxyUrl = null,
         string? cookiesFromBrowser = null,
-        bool downloadPlaylist = false);
+        bool downloadPlaylist = false,
+        long? limitBytesPerSecond = null);
 }
 
 public static class YtDlpProbeParser
@@ -351,7 +352,8 @@ public static class YtDlpArgumentBuilder
         string ffmpegPath,
         string? proxyUrl = null,
         string? cookiesFromBrowser = null,
-        bool downloadPlaylist = false)
+        bool downloadPlaylist = false,
+        long? limitBytesPerSecond = null)
     {
         var arguments = new List<string>
         {
@@ -377,8 +379,20 @@ public static class YtDlpArgumentBuilder
 
         AddProxy(arguments, proxyUrl);
         AddBrowserCookies(arguments, cookiesFromBrowser);
+        AddRateLimit(arguments, limitBytesPerSecond);
         arguments.Add(url);
         return arguments;
+    }
+
+    private static void AddRateLimit(
+        List<string> arguments,
+        long? limitBytesPerSecond)
+    {
+        if (limitBytesPerSecond > 0)
+        {
+            arguments.Add("--limit-rate");
+            arguments.Add(limitBytesPerSecond.Value.ToString());
+        }
     }
 
     private static void AddBrowserCookies(
@@ -542,7 +556,8 @@ public sealed class YtDlpMediaService : IYtDlpMediaService
         CancellationToken cancellationToken = default,
         string? proxyUrl = null,
         string? cookiesFromBrowser = null,
-        bool downloadPlaylist = false)
+        bool downloadPlaylist = false,
+        long? limitBytesPerSecond = null)
     {
         Uri source = ValidateUrl(url);
 
@@ -579,7 +594,8 @@ public sealed class YtDlpMediaService : IYtDlpMediaService
                 ffmpegPath,
                 proxyUrl,
                 cookiesFromBrowser,
-                downloadPlaylist);
+                downloadPlaylist,
+                limitBytesPerSecond);
 
         ProcessResult result;
         try

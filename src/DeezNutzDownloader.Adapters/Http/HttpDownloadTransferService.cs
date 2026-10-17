@@ -313,6 +313,12 @@ public sealed class HttpDownloadTransferService
                             bytesWritten,
                             totalBytes));
 
+                    // Optional quiet-hours pacing: a sliding 1s
+                    // window shared across resume attempts.
+                    long windowBytes = 0;
+                    DateTimeOffset windowStart =
+                        DateTimeOffset.UtcNow;
+
                     await using (
                         var resumeStream = new FileStream(
                             temporaryPath,
@@ -352,12 +358,41 @@ public sealed class HttpDownloadTransferService
                             checked
                             {
                                 bytesWritten += bytesRead;
+                                windowBytes += bytesRead;
                             }
 
                             progress?.Report(
                                 new DownloadTransferProgress(
                                     bytesWritten,
                                     totalBytes));
+
+                            if (request.MaxBytesPerSecond > 0)
+                            {
+                                TimeSpan elapsed =
+                                    DateTimeOffset.UtcNow -
+                                    windowStart;
+
+                                TimeSpan wait =
+                                    TransferThrottler.ComputeDelay(
+                                        windowBytes,
+                                        elapsed,
+                                        request.MaxBytesPerSecond);
+
+                                if (wait > TimeSpan.Zero)
+                                {
+                                    await Task.Delay(
+                                            wait,
+                                            cancellationToken)
+                                        .ConfigureAwait(false);
+                                }
+
+                                if (elapsed >= TimeSpan.FromSeconds(1))
+                                {
+                                    windowBytes = 0;
+                                    windowStart =
+                                        DateTimeOffset.UtcNow;
+                                }
+                            }
                         }
 
                         await resumeStream.FlushAsync(

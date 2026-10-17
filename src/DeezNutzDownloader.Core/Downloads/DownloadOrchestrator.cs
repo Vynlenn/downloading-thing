@@ -63,7 +63,8 @@ public sealed class DownloadOrchestrator : IDisposable
     public async Task<DownloadBatchResult> StartAllAsync(
         string destinationDirectory,
         int maximumConcurrency,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        long? maxBytesPerSecond = null)
     {
         string normalizedDestination =
             ValidateDestinationDirectory(
@@ -136,7 +137,8 @@ public sealed class DownloadOrchestrator : IDisposable
                     selectedItems,
                     normalizedDestination,
                     state,
-                    runCancellation.Token);
+                    runCancellation.Token,
+                    maxBytesPerSecond);
             }
 
             await Task.WhenAll(workers)
@@ -233,7 +235,8 @@ public sealed class DownloadOrchestrator : IDisposable
         IReadOnlyList<DownloadQueueItem> selectedItems,
         string destinationDirectory,
         BatchWorkState state,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        long? maxBytesPerSecond = null)
     {
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -288,7 +291,8 @@ public sealed class DownloadOrchestrator : IDisposable
             {
                 var request = new DownloadTransferRequest(
                     new Uri(item.Url, UriKind.Absolute),
-                    itemDirectory);
+                    itemDirectory,
+                    maxBytesPerSecond);
 
                 var progress =
                     new InlineProgress<

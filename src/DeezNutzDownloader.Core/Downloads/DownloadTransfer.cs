@@ -2,7 +2,8 @@ namespace DeezNutzDownloader.Core.Downloads;
 
 public sealed record DownloadTransferRequest(
     Uri Source,
-    string DestinationDirectory);
+    string DestinationDirectory,
+    long? MaxBytesPerSecond = null);
 
 public sealed record DownloadTransferProgress(
     long BytesReceived,

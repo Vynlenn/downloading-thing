@@ -24,7 +24,7 @@ public enum ProxyType
 
 public sealed class AppSettings
 {
-    public int ConfigurationVersion { get; set; } = 4;
+    public int ConfigurationVersion { get; set; } = 5;
 
     public string DownloadFolder { get; set; } = string.Empty;
 
@@ -72,4 +72,23 @@ public sealed class AppSettings
     /// logged-in session for video sites that need a login.
     /// </summary>
     public string YtDlpCookiesFromBrowser { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Quiet-hours speed cap: inside the window downloads run at
+    /// QuietHoursCapKBps, outside it full speed. Off by default.
+    /// </summary>
+    public bool QuietHoursEnabled { get; set; } = false;
+
+    /// <summary>Window start, local time (hours + minutes).</summary>
+    public int QuietHoursStartHour { get; set; } = 22;
+
+    public int QuietHoursStartMinute { get; set; } = 0;
+
+    /// <summary>Window end, local time (hours + minutes).</summary>
+    public int QuietHoursEndHour { get; set; } = 7;
+
+    public int QuietHoursEndMinute { get; set; } = 0;
+
+    /// <summary>Capped rate inside quiet hours (KB/s).</summary>
+    public int QuietHoursCapKBps { get; set; } = 512;
 }

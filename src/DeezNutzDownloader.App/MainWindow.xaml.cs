@@ -135,6 +135,16 @@ public partial class MainWindow : Window
             _settings.OrganizeIntoSiteFolders;
         ClipboardWatchCheckBox.IsChecked =
             _settings.ClipboardWatchEnabled;
+        QuietHoursCheckBox.IsChecked =
+            _settings.QuietHoursEnabled;
+        QuietStartTextBox.Text = FormatClock(
+            _settings.QuietHoursStartHour,
+            _settings.QuietHoursStartMinute);
+        QuietEndTextBox.Text = FormatClock(
+            _settings.QuietHoursEndHour,
+            _settings.QuietHoursEndMinute);
+        QuietCapTextBox.Text =
+            _settings.QuietHoursCapKBps.ToString();
 
         StorageModeText.Text = _paths.IsPortable
             ? "Portable mode"
@@ -513,7 +523,8 @@ public partial class MainWindow : Window
                         CancellationToken.None,
                         proxyUrl,
                         browserCookies,
-                        grabPlaylist));
+                        grabPlaylist,
+                        ResolveBatchSpeedCap()));
 
             _history.Record(
                 new DownloadHistoryEntry(
@@ -964,17 +975,25 @@ public partial class MainWindow : Window
 
             orchestrator.ChallengeBlocked += challengeHandler;
 
+            long? batchCap = ResolveBatchSpeedCap();
+
             ApplicationStatusText.Text =
                 $"Starting {startableItems.Length} download" +
                 $"{(startableItems.Length == 1 ? "" : "s")} " +
                 $"with up to {maximumConcurrency} concurrent " +
                 "transfer" +
-                $"{(maximumConcurrency == 1 ? "" : "s")}...";
+                $"{(maximumConcurrency == 1 ? "" : "s")}" +
+                (batchCap.HasValue
+                    ? $" at quiet-hours {QuietHoursSchedule.FormatRate(batchCap.Value)}"
+                    : string.Empty) +
+                "...";
 
             Task<DownloadBatchResult> batchTask =
                 orchestrator.StartAllAsync(
                     destinationDirectory,
-                    maximumConcurrency);
+                    maximumConcurrency,
+                    CancellationToken.None,
+                    batchCap);
 
             RefreshDownloadQueue();
 
@@ -1070,6 +1089,62 @@ public partial class MainWindow : Window
         {
             StartAllDownloads_Click(sender, e);
         }
+    }
+
+    private static string FormatClock(int hour, int minute)
+    {
+        return $"{hour:D2}:{minute:D2}";
+    }
+
+    private static int ParseClockHour(string text, string field)
+    {
+        if (
+            TimeOnly.TryParse(text?.Trim(), out TimeOnly parsed))
+        {
+            return parsed.Hour;
+        }
+
+        throw new InvalidOperationException(
+            "Quiet-hours times must look like 22:00.");
+    }
+
+    private static int ParseClockMinute(string text, string field)
+    {
+        if (
+            TimeOnly.TryParse(text?.Trim(), out TimeOnly parsed))
+        {
+            return parsed.Minute;
+        }
+
+        throw new InvalidOperationException(
+            "Quiet-hours times must look like 22:00.");
+    }
+
+    /// <summary>
+    /// Quiet-hours cap for this batch (local clock), or null for
+    /// full speed.
+    /// </summary>
+    private long? ResolveBatchSpeedCap()
+    {
+        if (!_settings.QuietHoursEnabled)
+        {
+            return null;
+        }
+
+        var schedule = new QuietHoursSchedule(
+            true,
+            new TimeSpan(
+                _settings.QuietHoursStartHour,
+                _settings.QuietHoursStartMinute,
+                0),
+            new TimeSpan(
+                _settings.QuietHoursEndHour,
+                _settings.QuietHoursEndMinute,
+                0),
+            (long)_settings.QuietHoursCapKBps * 1024L);
+
+        return schedule.EffectiveCapBytesPerSecond(
+            TimeOnly.FromDateTime(DateTime.Now));
     }
 
     /// <summary>
@@ -1795,6 +1870,30 @@ public partial class MainWindow : Window
                 OrganizeFoldersCheckBox.IsChecked != false;
             _settings.ClipboardWatchEnabled =
                 ClipboardWatchCheckBox.IsChecked != false;
+            _settings.QuietHoursEnabled =
+                QuietHoursCheckBox.IsChecked == true;
+            _settings.QuietHoursStartHour = ParseClockHour(
+                QuietStartTextBox.Text,
+                nameof(QuietStartTextBox));
+            _settings.QuietHoursStartMinute = ParseClockMinute(
+                QuietStartTextBox.Text,
+                nameof(QuietStartTextBox));
+            _settings.QuietHoursEndHour = ParseClockHour(
+                QuietEndTextBox.Text,
+                nameof(QuietEndTextBox));
+            _settings.QuietHoursEndMinute = ParseClockMinute(
+                QuietEndTextBox.Text,
+                nameof(QuietEndTextBox));
+            if (!int.TryParse(
+                    QuietCapTextBox.Text.Trim(),
+                    out int quietCapKBps) ||
+                quietCapKBps is < 1 or > 1_000_000)
+            {
+                throw new InvalidOperationException(
+                    "Quiet-hours cap must be 1 to 1000000 KB/s.");
+            }
+
+            _settings.QuietHoursCapKBps = quietCapKBps;
             _settings.ProxyHost = ProxyHostTextBox.Text.Trim();
             _settings.ProxyPort = port;
             _settings.ProxyUsername = ProxyUsernameTextBox.Text.Trim();
