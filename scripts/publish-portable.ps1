@@ -8,7 +8,7 @@ Set-Location -LiteralPath $Root
 
 $Configuration = "Release"
 $Runtime = "win-x64"
-$PublishDir = Join-Path $Root "publish" "portable"
+$PublishDir = Join-Path (Join-Path $Root "publish") "portable"
 $Version = "0.1.0"
 
 $Csproj = Join-Path $Root "src/DeezNutzDownloader.App/DeezNutzDownloader.App.csproj"
@@ -50,7 +50,7 @@ DeezNutzDownloader - portable
 '@ | Set-Content -LiteralPath (Join-Path $PublishDir "README.txt") -Encoding UTF8
 
 $ZipName = "DeezNutzDownloader-portable-$Version.zip"
-$ZipPath = Join-Path $Root "publish" $ZipName
+$ZipPath = Join-Path (Join-Path $Root "publish") $ZipName
 if (Test-Path $ZipPath) { Remove-Item -Force $ZipPath }
 Compress-Archive -Path (Join-Path $PublishDir "*") -DestinationPath $ZipPath
 

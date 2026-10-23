@@ -24,6 +24,9 @@ portable.flag
 # Bundled helper binaries will be managed separately
 tools/bin/
 
+# Local publish output (built zips ship via GitHub releases)
+publish/
+
 # Temporary and backup files
 *.tmp
 *.bak
