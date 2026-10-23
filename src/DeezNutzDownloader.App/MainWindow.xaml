@@ -262,8 +262,8 @@
                                                                          Height="7"
                                                                          Minimum="0"
                                                                          Maximum="100"
-                                                                         Value="{Binding ProgressPercentage}"
-                                                                         IsIndeterminate="{Binding IsIndeterminate}"
+                                                                         Value="{Binding ProgressPercentage, Mode=OneWay}"
+                                                                         IsIndeterminate="{Binding IsIndeterminate, Mode=OneWay}"
                                                                          Foreground="{DynamicResource AccentBrush}"
                                                                          Background="{DynamicResource AppBackgroundBrush}"
                                                                          BorderThickness="0" />
