@@ -59,7 +59,7 @@ public sealed class DownloadQueueStore
         await File.WriteAllTextAsync(
             temporaryFile,
             json,
-            cancellationToken);
+            cancellationToken).ConfigureAwait(false);
 
         File.Move(temporaryFile, _queueFile, true);
     }
@@ -77,7 +77,7 @@ public sealed class DownloadQueueStore
             string json =
                 await File.ReadAllTextAsync(
                     _queueFile,
-                    cancellationToken);
+                    cancellationToken).ConfigureAwait(false);
 
             if (string.IsNullOrWhiteSpace(json))
             {

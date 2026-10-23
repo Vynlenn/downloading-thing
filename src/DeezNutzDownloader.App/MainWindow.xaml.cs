@@ -2130,10 +2130,22 @@ public partial class MainWindow : Window
         }
     }
 
-    private void MainWindow_Closing(
+    // Closing must never block the UI thread on async saves: the
+    // stores' continuations need the dispatcher, so Wait()/GetResult()
+    // here deadlocked every close. Instead the first close cancels,
+    // saves in the background, then closes for real.
+    private bool _closeConfirmed;
+
+    private async void MainWindow_Closing(
         object? sender,
         CancelEventArgs e)
     {
+        if (_closeConfirmed)
+        {
+            return;
+        }
+
+        e.Cancel = true;
         _isClosing = true;
         _clipboardWatchTimer.Stop();
 
@@ -2141,12 +2153,11 @@ public partial class MainWindow : Window
 
         try
         {
-            _queuePersistGate.Wait();
+            await _queuePersistGate.WaitAsync().ConfigureAwait(true);
 
             try
             {
-                _queueStore.SaveAsync(
-                    _downloadQueue.Items).GetAwaiter().GetResult();
+                await _queueStore.SaveAsync(_downloadQueue.Items);
             }
             finally
             {
@@ -2154,11 +2165,14 @@ public partial class MainWindow : Window
             }
 
             RecordCompletedItems();
-            _historyStore.SaveAsync(_history).GetAwaiter().GetResult();
+            await _historyStore.SaveAsync(_history);
         }
         catch
         {
         }
+
+        _closeConfirmed = true;
+        Close();
     }
 
     private void MainWindow_Closed(
