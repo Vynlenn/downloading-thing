@@ -97,6 +97,49 @@ public sealed class PixeldrainResolverTests
     }
 
     [Fact]
+    public void Parse_ErrorJson_NotFound_ThrowsTerminal()
+    {
+        const string json =
+            "{\"success\":false,\"value\":\"not_found\"," +
+            "\"message\":\"The entity you requested could not " +
+            "be found\"}";
+
+        InvalidOperationException failure =
+            Assert.Throws<InvalidOperationException>(
+                () => PixeldrainInfoParser.Parse(json, "AbC123xYz"));
+
+        Assert.Contains("no file", failure.Message);
+        Assert.DoesNotContain("queued for retry", failure.Message);
+    }
+
+    [Fact]
+    public async Task Resolve_MissingFile_ThrowsTerminalNotUnreachable()
+    {
+        // Live shape: HTTP 404 with a JSON not_found body. The
+        // user must hear "removed link", not "check connection".
+        var handler = new RouteHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.NotFound)
+            {
+                Content = new StringContent(
+                    "{\"success\":false,\"value\":\"not_found\"," +
+                    "\"message\":\"The entity you requested " +
+                    "could not be found\"}")
+            });
+
+        var resolver = new PixeldrainResolver();
+        using var client = new HttpClient(handler);
+
+        InvalidOperationException failure =
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => resolver.ResolveAsync(
+                    new Uri("https://pixeldrain.com/u/AbC123xYz"),
+                    client));
+
+        Assert.Contains("no file", failure.Message);
+        Assert.DoesNotContain("Check the connection", failure.Message);
+    }
+
+    [Fact]
     public async Task Resolve_FullFlow_ReturnsDownload()
     {
         var handler = new RouteHandler(request =>

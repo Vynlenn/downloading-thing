@@ -50,19 +50,14 @@ public sealed class PixeldrainResolver : IHostFileResolver, IHostFolderResolver
                         cancellationToken)
                     .ConfigureAwait(false);
 
-            if (
-                infoResponse.StatusCode ==
-                    System.Net.HttpStatusCode.Forbidden ||
-                infoResponse.StatusCode ==
-                    System.Net.HttpStatusCode.TooManyRequests)
+            if (!infoResponse.IsSuccessStatusCode)
             {
-                throw PixeldrainErrors.ToException(
-                    fileId,
-                    code: string.Empty,
-                    message: string.Empty);
+                throw await PixeldrainErrors.ToStatusExceptionAsync(
+                        fileId,
+                        infoResponse,
+                        cancellationToken)
+                    .ConfigureAwait(false);
             }
-
-            infoResponse.EnsureSuccessStatusCode();
 
             infoJson = await infoResponse.Content.ReadAsStringAsync(
                     cancellationToken)
@@ -177,7 +172,14 @@ public sealed class PixeldrainResolver : IHostFileResolver, IHostFolderResolver
                         cancellationToken)
                     .ConfigureAwait(false);
 
-            response.EnsureSuccessStatusCode();
+            if (!response.IsSuccessStatusCode)
+            {
+                throw await PixeldrainErrors.ToStatusExceptionAsync(
+                        listId,
+                        response,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
 
             listJson = await response.Content.ReadAsStringAsync(
                     cancellationToken)
@@ -482,6 +484,75 @@ internal static class PixeldrainErrors
             combined.Contains("hotlink");
     }
 
+    internal static bool IsNotFound(string code, string message)
+    {
+        string combined = (code + " " + message).ToLowerInvariant();
+
+        return
+            combined.Contains("not_found") ||
+            combined.Contains("not found");
+    }
+
+    /// <summary>
+    /// Turns a non-2xx API answer into the honest error: the JSON
+    /// body (when parseable) decides between CAPTCHA wall, removed
+    /// entity, and throttle — never a "check connection" lie, and
+    /// never an endless retry for something that is gone.
+    /// </summary>
+    internal static async Task<Exception> ToStatusExceptionAsync(
+        string fileId,
+        HttpResponseMessage response,
+        CancellationToken cancellationToken)
+    {
+        string body;
+
+        try
+        {
+            body = await response.Content.ReadAsStringAsync(
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (HttpRequestException)
+        {
+            body = string.Empty;
+        }
+
+        string code = string.Empty;
+        string message = string.Empty;
+
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(
+                body ?? string.Empty);
+
+            JsonElement root = document.RootElement;
+            code = ReadCode(root);
+            message = ReadMessage(root);
+        }
+        catch (JsonException)
+        {
+            // Non-JSON error page: fall through to status-based text.
+        }
+
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            return ToException(
+                fileId,
+                string.IsNullOrWhiteSpace(code) ? "not_found" : code,
+                message);
+        }
+
+        if (!string.IsNullOrWhiteSpace(code + message))
+        {
+            return ToException(fileId, code, message);
+        }
+
+        return new InvalidOperationException(
+            $"Pixeldrain refused {fileId} " +
+            $"(HTTP {(int)response.StatusCode}). " +
+            "Try again shortly — the item stays queued.");
+    }
+
     internal static Exception ToException(
         string fileId,
         string code,
@@ -501,6 +572,18 @@ internal static class PixeldrainErrors
                 pageUrl,
                 $"{detail} Solve it once in the app browser and " +
                 "the queue resumes.");
+        }
+
+        if (IsNotFound(code, message))
+        {
+            string detail = string.IsNullOrWhiteSpace(message)
+                ? code
+                : message.Trim();
+
+            return new InvalidOperationException(
+                $"Pixeldrain has no file {fileId} ({detail}). " +
+                "It was removed or the link is wrong — remove " +
+                "the item, retrying will not help.");
         }
 
         string reason = string.IsNullOrWhiteSpace(message)

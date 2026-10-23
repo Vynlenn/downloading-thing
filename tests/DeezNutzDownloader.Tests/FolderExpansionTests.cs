@@ -79,6 +79,31 @@ public sealed class PixeldrainListTests
     }
 
     [Fact]
+    public async Task ResolveFolder_MissingList_ThrowsTerminal()
+    {
+        var handler = new RouteHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.NotFound)
+            {
+                Content = new StringContent(
+                    "{\"success\":false,\"value\":\"not_found\"," +
+                    "\"message\":\"The entity you requested " +
+                    "could not be found\"}")
+            });
+
+        var resolver = new PixeldrainResolver();
+        using var client = new HttpClient(handler);
+
+        InvalidOperationException failure =
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => resolver.ResolveFolderAsync(
+                    new Uri("https://pixeldrain.com/l/L8bhwx"),
+                    client));
+
+        Assert.Contains("no file", failure.Message);
+        Assert.DoesNotContain("Check the connection", failure.Message);
+    }
+
+    [Fact]
     public void ParseInfo_BadHash_DegradesToNull()
     {
         const string json =
