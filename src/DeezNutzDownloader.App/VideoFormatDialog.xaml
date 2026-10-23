@@ -1,0 +1,52 @@
+<Window x:Class="DeezNutzDownloader.App.VideoFormatDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Download video"
+        Width="560"
+        Height="480"
+        MinWidth="440"
+        MinHeight="360"
+        WindowStartupLocation="CenterOwner">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <TextBlock x:Name="TitleText"
+                   Grid.Row="0"
+                   FontSize="16"
+                   FontWeight="SemiBold"
+                   TextWrapping="Wrap"
+                   Text="Video" />
+
+        <CheckBox x:Name="PlaylistCheckBox"
+                  Grid.Row="1"
+                  Margin="0,10,0,0"
+                  Visibility="Collapsed"
+                  Content="Grab the entire playlist" />
+
+        <ListBox x:Name="FormatsList"
+                 Grid.Row="2"
+                 Margin="0,10,0,0"
+                 SelectionMode="Single"
+                 DisplayMemberPath="Label" />
+
+        <StackPanel Grid.Row="3"
+                    Margin="0,12,0,0"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right">
+            <Button Content="Cancel"
+                    Margin="0,0,8,0"
+                    Padding="12,6"
+                    IsCancel="True" />
+            <Button x:Name="DownloadButton"
+                    Content="Download"
+                    Padding="12,6"
+                    IsDefault="True"
+                    Click="DownloadButton_Click" />
+        </StackPanel>
+    </Grid>
+</Window>

@@ -22,43 +22,58 @@ public static class ThemeManager
         if (useDarkTheme)
         {
             resources["AppBackgroundBrush"] =
-                Brush("#FF060C09");
+                Brush("#FF0A0F0D");
 
             resources["SurfaceBrush"] =
-                Brush("#FF0E1B15");
+                Brush("#FF111A16");
 
             resources["SurfaceSecondaryBrush"] =
-                Brush("#FF162A20");
+                Brush("#FF17231D");
+
+            resources["RaisedSurfaceBrush"] =
+                Brush("#FF1A2921");
 
             resources["TextBrush"] =
-                Brush("#FFF1FBF6");
+                Brush("#FFE6F0EB");
 
             resources["MutedTextBrush"] =
-                Brush("#FFA6BBAF");
+                Brush("#FFA3B3AA");
+
+            resources["DisabledTextBrush"] =
+                Brush("#FF718078");
 
             resources["BorderBrush"] =
-                Brush("#FF2D5141");
+                Brush("#FF29382F");
+
+            resources["StrongBorderBrush"] =
+                Brush("#FF5A7165");
 
             resources["AccentBrush"] =
-                Brush("#FF18A875");
+                Brush("#FF10B981");
 
             resources["AccentHoverBrush"] =
-                Brush("#FF25C88C");
+                Brush("#FF34D399");
 
             resources["AccentPressedBrush"] =
-                Brush("#FF107D58");
+                Brush("#FF0C7A55");
 
             resources["AccentSoftBrush"] =
-                Brush("#FF123D2F");
+                Brush("#FF10382B");
 
             resources["AccentTextBrush"] =
-                Brush("#FF66F0B9");
+                Brush("#FF34D399");
+
+            resources["TextOnAccentBrush"] =
+                Brush("#FF062219");
 
             resources["SidebarBrush"] =
-                Brush("#FF08130E");
+                Brush("#FF0C1411");
 
             resources["SurfaceHoverBrush"] =
-                Brush("#FF1D392C");
+                Brush("#FF1E2F26");
+
+            resources["ErrorBrush"] =
+                Brush("#FFF87171");
         }
         else
         {
@@ -71,14 +86,23 @@ public static class ThemeManager
             resources["SurfaceSecondaryBrush"] =
                 Brush("#FFE8F1EC");
 
+            resources["RaisedSurfaceBrush"] =
+                Brush("#FFFFFFFF");
+
             resources["TextBrush"] =
                 Brush("#FF14231C");
 
             resources["MutedTextBrush"] =
                 Brush("#FF667B70");
 
+            resources["DisabledTextBrush"] =
+                Brush("#FF9DB0A6");
+
             resources["BorderBrush"] =
                 Brush("#FFD2E1D9");
+
+            resources["StrongBorderBrush"] =
+                Brush("#FF9DB8AB");
 
             resources["AccentBrush"] =
                 Brush("#FF147A5C");
@@ -95,11 +119,17 @@ public static class ThemeManager
             resources["AccentTextBrush"] =
                 Brush("#FF0C6D50");
 
+            resources["TextOnAccentBrush"] =
+                Brush("#FFFFFFFF");
+
             resources["SidebarBrush"] =
                 Brush("#FFE7F0EB");
 
             resources["SurfaceHoverBrush"] =
                 Brush("#FFDDECE4");
+
+            resources["ErrorBrush"] =
+                Brush("#FFB91C1C");
         }
     }
 

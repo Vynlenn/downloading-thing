@@ -29,6 +29,10 @@ public sealed class AppPaths
         }
 
         SettingsFile = Path.Combine(DataDirectory, "settings.json");
+        DownloadQueueFile = Path.Combine(DataDirectory, "download-queue.json");
+        DownloadHistoryFile = Path.Combine(DataDirectory, "download-history.json");
+        ChallengeSessionsFile = Path.Combine(DataDirectory, "challenge-sessions.json");
+        ToolsDirectory = Path.Combine(DataDirectory, "tools");
         LogsDirectory = Path.Combine(DataDirectory, "logs");
     }
 
@@ -42,6 +46,14 @@ public sealed class AppPaths
 
     public string SettingsFile { get; }
 
+    public string DownloadQueueFile { get; }
+
+    public string DownloadHistoryFile { get; }
+
+    public string ChallengeSessionsFile { get; }
+
+    public string ToolsDirectory { get; }
+
     public string LogsDirectory { get; }
 
     public static AppPaths CreateDefault()
@@ -52,6 +64,7 @@ public sealed class AppPaths
     public void EnsureDirectoriesExist()
     {
         Directory.CreateDirectory(DataDirectory);
+        Directory.CreateDirectory(ToolsDirectory);
         Directory.CreateDirectory(LogsDirectory);
     }
 }

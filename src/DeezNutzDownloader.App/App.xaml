@@ -5,19 +5,32 @@
              DispatcherUnhandledException="Application_DispatcherUnhandledException"
              ShutdownMode="OnMainWindowClose">
     <Application.Resources>
-        <SolidColorBrush x:Key="AppBackgroundBrush" Color="#FF060C09" />
-        <SolidColorBrush x:Key="SurfaceBrush" Color="#FF0E1B15" />
-        <SolidColorBrush x:Key="SurfaceSecondaryBrush" Color="#FF162A20" />
-        <SolidColorBrush x:Key="TextBrush" Color="#FFF1FBF6" />
-        <SolidColorBrush x:Key="MutedTextBrush" Color="#FFA6BBAF" />
-        <SolidColorBrush x:Key="BorderBrush" Color="#FF2D5141" />
-        <SolidColorBrush x:Key="AccentBrush" Color="#FF18A875" />
-        <SolidColorBrush x:Key="AccentHoverBrush" Color="#FF25C88C" />
-        <SolidColorBrush x:Key="AccentPressedBrush" Color="#FF107D58" />
-        <SolidColorBrush x:Key="AccentSoftBrush" Color="#FF123D2F" />
-        <SolidColorBrush x:Key="AccentTextBrush" Color="#FF66F0B9" />
-        <SolidColorBrush x:Key="SidebarBrush" Color="#FF08130E" />
-        <SolidColorBrush x:Key="SurfaceHoverBrush" Color="#FF1D392C" />
+        <SolidColorBrush x:Key="AppBackgroundBrush" Color="#FF0A0F0D" />
+        <SolidColorBrush x:Key="SurfaceBrush" Color="#FF111A16" />
+        <SolidColorBrush x:Key="SurfaceSecondaryBrush" Color="#FF17231D" />
+        <SolidColorBrush x:Key="RaisedSurfaceBrush" Color="#FF1A2921" />
+        <SolidColorBrush x:Key="TextBrush" Color="#FFE6F0EB" />
+        <SolidColorBrush x:Key="MutedTextBrush" Color="#FFA3B3AA" />
+        <SolidColorBrush x:Key="DisabledTextBrush" Color="#FF718078" />
+        <SolidColorBrush x:Key="BorderBrush" Color="#FF29382F" />
+        <SolidColorBrush x:Key="StrongBorderBrush" Color="#FF5A7165" />
+        <SolidColorBrush x:Key="AccentBrush" Color="#FF10B981" />
+        <SolidColorBrush x:Key="AccentHoverBrush" Color="#FF34D399" />
+        <SolidColorBrush x:Key="AccentPressedBrush" Color="#FF0C7A55" />
+        <SolidColorBrush x:Key="AccentSoftBrush" Color="#FF10382B" />
+        <SolidColorBrush x:Key="AccentTextBrush" Color="#FF34D399" />
+        <SolidColorBrush x:Key="TextOnAccentBrush" Color="#FF062219" />
+        <SolidColorBrush x:Key="SidebarBrush" Color="#FF0C1411" />
+        <SolidColorBrush x:Key="SurfaceHoverBrush" Color="#FF1E2F26" />
+        <SolidColorBrush x:Key="ErrorBrush" Color="#FFF87171" />
+
+        <DropShadowEffect x:Key="MenuShadow"
+                          Color="#FF000000"
+                          Opacity="0.45"
+                          BlurRadius="18"
+                          ShadowDepth="4"
+                          Direction="270"
+                          RenderingBias="Performance" />
 
         <Style TargetType="Window">
             <Setter Property="Background"
@@ -124,8 +137,24 @@
                                 Background="{TemplateBinding Background}"
                                 CornerRadius="7"
                                 Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
-                                              VerticalAlignment="Center" />
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+
+                                <Rectangle x:Name="SelectionRail"
+                                           Width="3"
+                                           Margin="0,3,9,3"
+                                           RadiusX="1.5"
+                                           RadiusY="1.5"
+                                           Fill="{DynamicResource AccentBrush}"
+                                           Opacity="0" />
+
+                                <ContentPresenter Grid.Column="1"
+                                                  HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                                  VerticalAlignment="Center" />
+                            </Grid>
                         </Border>
 
                         <ControlTemplate.Triggers>
@@ -145,6 +174,9 @@
                                         Value="{DynamicResource AccentSoftBrush}" />
                                 <Setter Property="Foreground"
                                         Value="{DynamicResource AccentTextBrush}" />
+                                <Setter TargetName="SelectionRail"
+                                        Property="Opacity"
+                                        Value="1" />
                             </Trigger>
 
                             <Trigger Property="IsEnabled"
@@ -240,14 +272,16 @@
                                         Padding="5"
                                         MinWidth="{TemplateBinding ActualWidth}"
                                         MaxHeight="{TemplateBinding MaxDropDownHeight}"
-                                        Background="{DynamicResource SurfaceSecondaryBrush}"
-                                        BorderBrush="{DynamicResource BorderBrush}"
+                                        Background="{DynamicResource RaisedSurfaceBrush}"
+                                        BorderBrush="{DynamicResource StrongBorderBrush}"
                                         BorderThickness="1"
-                                        CornerRadius="9">
+                                        CornerRadius="9"
+                                        Effect="{StaticResource MenuShadow}">
                                     <ScrollViewer CanContentScroll="True"
                                                   VerticalScrollBarVisibility="Auto">
                                         <StackPanel IsItemsHost="True"
-                                                    KeyboardNavigation.DirectionalNavigation="Contained" />
+                                                    KeyboardNavigation.DirectionalNavigation="Contained"
+                                                    Margin="2" />
                                     </ScrollViewer>
                                 </Border>
                             </Popup>
@@ -298,7 +332,7 @@
             <Setter Property="Background"
                     Value="{DynamicResource AccentBrush}" />
             <Setter Property="Foreground"
-                    Value="White" />
+                    Value="{DynamicResource TextOnAccentBrush}" />
             <Setter Property="BorderBrush"
                     Value="{DynamicResource AccentBrush}" />
             <Setter Property="BorderThickness"
@@ -319,7 +353,14 @@
                                 BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}"
                                 CornerRadius="9"
-                                Padding="{TemplateBinding Padding}">
+                                Padding="{TemplateBinding Padding}"
+                                RenderTransformOrigin="0.5,0.5">
+                            <Border.RenderTransform>
+                                <ScaleTransform x:Name="PressScale"
+                                                ScaleX="1"
+                                                ScaleY="1" />
+                            </Border.RenderTransform>
+
                             <ContentPresenter HorizontalAlignment="Center"
                                               VerticalAlignment="Center"
                                               RecognizesAccessKey="True" />
@@ -328,6 +369,50 @@
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver"
                                      Value="True">
+                                <Trigger.EnterActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="PressScale"
+                                                             Storyboard.TargetProperty="ScaleX"
+                                                             To="1.02"
+                                                             Duration="0:0:0.12">
+                                                <DoubleAnimation.EasingFunction>
+                                                    <CubicEase EasingMode="EaseOut" />
+                                                </DoubleAnimation.EasingFunction>
+                                            </DoubleAnimation>
+                                            <DoubleAnimation Storyboard.TargetName="PressScale"
+                                                             Storyboard.TargetProperty="ScaleY"
+                                                             To="1.02"
+                                                             Duration="0:0:0.12">
+                                                <DoubleAnimation.EasingFunction>
+                                                    <CubicEase EasingMode="EaseOut" />
+                                                </DoubleAnimation.EasingFunction>
+                                            </DoubleAnimation>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.EnterActions>
+                                <Trigger.ExitActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="PressScale"
+                                                             Storyboard.TargetProperty="ScaleX"
+                                                             To="1"
+                                                             Duration="0:0:0.12">
+                                                <DoubleAnimation.EasingFunction>
+                                                    <CubicEase EasingMode="EaseOut" />
+                                                </DoubleAnimation.EasingFunction>
+                                            </DoubleAnimation>
+                                            <DoubleAnimation Storyboard.TargetName="PressScale"
+                                                             Storyboard.TargetProperty="ScaleY"
+                                                             To="1"
+                                                             Duration="0:0:0.12">
+                                                <DoubleAnimation.EasingFunction>
+                                                    <CubicEase EasingMode="EaseOut" />
+                                                </DoubleAnimation.EasingFunction>
+                                            </DoubleAnimation>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.ExitActions>
                                 <Setter TargetName="ButtonBorder"
                                         Property="Background"
                                         Value="{DynamicResource AccentHoverBrush}" />
@@ -339,11 +424,28 @@
                             <Trigger Property="IsPressed"
                                      Value="True">
                                 <Setter TargetName="ButtonBorder"
+                                        Property="RenderTransform">
+                                    <Setter.Value>
+                                        <ScaleTransform ScaleX="0.985"
+                                                        ScaleY="0.985" />
+                                    </Setter.Value>
+                                </Setter>
+                                <Setter TargetName="ButtonBorder"
                                         Property="Background"
                                         Value="{DynamicResource AccentPressedBrush}" />
                                 <Setter TargetName="ButtonBorder"
                                         Property="BorderBrush"
                                         Value="{DynamicResource AccentPressedBrush}" />
+                            </Trigger>
+
+                            <Trigger Property="IsKeyboardFocused"
+                                     Value="True">
+                                <Setter TargetName="ButtonBorder"
+                                        Property="BorderBrush"
+                                        Value="{DynamicResource TextOnAccentBrush}" />
+                                <Setter TargetName="ButtonBorder"
+                                        Property="BorderThickness"
+                                        Value="2" />
                             </Trigger>
 
                             <Trigger Property="IsEnabled"
@@ -384,7 +486,14 @@
                                 BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}"
                                 CornerRadius="9"
-                                Padding="{TemplateBinding Padding}">
+                                Padding="{TemplateBinding Padding}"
+                                RenderTransformOrigin="0.5,0.5">
+                            <Border.RenderTransform>
+                                <ScaleTransform x:Name="PressScale"
+                                                ScaleX="1"
+                                                ScaleY="1" />
+                            </Border.RenderTransform>
+
                             <ContentPresenter HorizontalAlignment="Center"
                                               VerticalAlignment="Center"
                                               RecognizesAccessKey="True" />
@@ -393,6 +502,50 @@
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver"
                                      Value="True">
+                                <Trigger.EnterActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="PressScale"
+                                                             Storyboard.TargetProperty="ScaleX"
+                                                             To="1.015"
+                                                             Duration="0:0:0.12">
+                                                <DoubleAnimation.EasingFunction>
+                                                    <CubicEase EasingMode="EaseOut" />
+                                                </DoubleAnimation.EasingFunction>
+                                            </DoubleAnimation>
+                                            <DoubleAnimation Storyboard.TargetName="PressScale"
+                                                             Storyboard.TargetProperty="ScaleY"
+                                                             To="1.015"
+                                                             Duration="0:0:0.12">
+                                                <DoubleAnimation.EasingFunction>
+                                                    <CubicEase EasingMode="EaseOut" />
+                                                </DoubleAnimation.EasingFunction>
+                                            </DoubleAnimation>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.EnterActions>
+                                <Trigger.ExitActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="PressScale"
+                                                             Storyboard.TargetProperty="ScaleX"
+                                                             To="1"
+                                                             Duration="0:0:0.12">
+                                                <DoubleAnimation.EasingFunction>
+                                                    <CubicEase EasingMode="EaseOut" />
+                                                </DoubleAnimation.EasingFunction>
+                                            </DoubleAnimation>
+                                            <DoubleAnimation Storyboard.TargetName="PressScale"
+                                                             Storyboard.TargetProperty="ScaleY"
+                                                             To="1"
+                                                             Duration="0:0:0.12">
+                                                <DoubleAnimation.EasingFunction>
+                                                    <CubicEase EasingMode="EaseOut" />
+                                                </DoubleAnimation.EasingFunction>
+                                            </DoubleAnimation>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.ExitActions>
                                 <Setter TargetName="ButtonBorder"
                                         Property="Background"
                                         Value="{DynamicResource SurfaceHoverBrush}" />
@@ -406,6 +559,13 @@
                                 <Setter TargetName="ButtonBorder"
                                         Property="Background"
                                         Value="{DynamicResource AccentSoftBrush}" />
+                            </Trigger>
+
+                            <Trigger Property="IsKeyboardFocused"
+                                     Value="True">
+                                <Setter TargetName="ButtonBorder"
+                                        Property="BorderBrush"
+                                        Value="{DynamicResource AccentTextBrush}" />
                             </Trigger>
 
                             <Trigger Property="IsEnabled"
@@ -468,6 +628,16 @@
                                         Property="Background"
                                         Value="{DynamicResource AccentSoftBrush}" />
                             </Trigger>
+
+                            <Trigger Property="IsKeyboardFocused"
+                                     Value="True">
+                                <Setter TargetName="NavigationBorder"
+                                        Property="BorderBrush"
+                                        Value="{DynamicResource AccentTextBrush}" />
+                                <Setter TargetName="NavigationBorder"
+                                        Property="BorderThickness"
+                                        Value="1" />
+                            </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
@@ -488,7 +658,7 @@
                     <Setter Property="Background"
                             Value="{DynamicResource AccentBrush}" />
                     <Setter Property="Foreground"
-                            Value="White" />
+                            Value="{DynamicResource TextOnAccentBrush}" />
                 </Trigger>
             </Style.Triggers>
         </Style>

@@ -48,6 +48,21 @@ public sealed class SettingsStore
 
             bool settingsChanged = false;
 
+            if (
+                settings.MaximumConcurrentDownloads is < 1 or
+                > 64
+            )
+            {
+                settings.MaximumConcurrentDownloads = 3;
+                settingsChanged = true;
+            }
+
+            if (settings.ProxyPort is < 1 or > 65535)
+            {
+                settings.ProxyPort = 8080;
+                settingsChanged = true;
+            }
+
             if (string.IsNullOrWhiteSpace(settings.DownloadFolder))
             {
                 settings.DownloadFolder =
@@ -64,6 +79,54 @@ public sealed class SettingsStore
                 settings.Theme = AppTheme.Dark;
                 settingsChanged = true;
             }
+
+            // Version 4 introduces managed yt-dlp/ffmpeg.
+            // Existing installs opt in automatically; the toggle
+            // plus manual paths remain available in Settings.
+            if (settings.ConfigurationVersion < 4)
+            {
+                settings.ConfigurationVersion = 4;
+                settings.ExternalToolsAutoUpdate = true;
+                settingsChanged = true;
+            }
+
+            // Version 5 introduces quiet-hours caps (off by
+            // default). Clamp clock fields and the cap rate.
+            if (settings.ConfigurationVersion < 5)
+            {
+                settings.ConfigurationVersion = 5;
+                settingsChanged = true;
+            }
+
+            if (
+                settings.QuietHoursStartHour is < 0 or > 23 ||
+                settings.QuietHoursStartMinute is < 0 or > 59 ||
+                settings.QuietHoursEndHour is < 0 or > 23 ||
+                settings.QuietHoursEndMinute is < 0 or > 59)
+            {
+                settings.QuietHoursStartHour = 22;
+                settings.QuietHoursStartMinute = 0;
+                settings.QuietHoursEndHour = 7;
+                settings.QuietHoursEndMinute = 0;
+                settingsChanged = true;
+            }
+
+            if (settings.QuietHoursCapKBps is < 1 or > 1_000_000)
+            {
+                settings.QuietHoursCapKBps = 512;
+                settingsChanged = true;
+            }
+
+            // Version 6 introduces GitHub update checks (off
+            // until a repository is configured).
+            if (settings.ConfigurationVersion < 6)
+            {
+                settings.ConfigurationVersion = 6;
+                settings.UpdateRepository ??= string.Empty;
+                settingsChanged = true;
+            }
+
+            settings.UpdateRepository ??= string.Empty;
 
             if (settingsChanged)
             {
