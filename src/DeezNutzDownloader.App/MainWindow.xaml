@@ -807,6 +807,11 @@
                                            Foreground="{DynamicResource MutedTextBrush}"
                                            TextWrapping="Wrap"
                                            Text="Optional: e.g. chrome or firefox. Reads cookies from your own browser so yt-dlp can reach videos your account can see." />
+                                <TextBlock Margin="0,12,0,6"
+                                           Text="Subtitles (optional)"
+                                           FontWeight="SemiBold" />
+                                <TextBox x:Name="YtDlpSubtitlesTextBox"
+                                         ToolTip="Subtitle languages, e.g. en or en,de. Saved as .srt sidecars next to the video. Empty turns subtitles off." />
                             </StackPanel>
                         </Border>
 

@@ -14,7 +14,7 @@ namespace DeezNutzDownloader.Adapters.Http;
 /// never as a challenge or a silent failure.
 /// Per https://gofile.io/api.
 /// </summary>
-public sealed class GofileResolver : IHostFileResolver
+public sealed class GofileResolver : IHostFileResolver, IHostFolderResolver
 {
     private const string AccountsUrl = "https://api.gofile.io/accounts";
 
@@ -64,14 +64,111 @@ public sealed class GofileResolver : IHostFileResolver
 
         if (content.Files.Count > 1)
         {
-            throw new InvalidOperationException(
+            throw new FolderExpansionNeededException(
                 $"Gofile share {code} is a folder with " +
-                $"{content.Files.Count} files. Folder batch " +
-                "expansion is coming — grab single-file shares " +
-                "for now.");
+                $"{content.Files.Count} files. Expand it first " +
+                "(Start expands folders automatically).");
         }
 
         return content.Files[0];
+    }
+
+    public bool CanResolveFolder(Uri page)
+    {
+        return CanResolve(page);
+    }
+
+    /// <summary>
+    /// Resolves the whole share: folder name plus every file
+    /// (subfolders flattened, keeping their relative paths).
+    /// </summary>
+    public async Task<ResolvedHostFolder> ResolveFolderAsync(
+        Uri page,
+        HttpClient httpClient,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(page);
+        ArgumentNullException.ThrowIfNull(httpClient);
+
+        string? code = TryParseContentCode(page);
+
+        if (code is null)
+        {
+            throw new ArgumentException(
+                "Not a Gofile share address.",
+                nameof(page));
+        }
+
+        string token = await CreateGuestTokenAsync(
+                httpClient,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        GofileContent content = await GetContentAsync(
+                httpClient,
+                code,
+                token,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        if (content.Files.Count == 0)
+        {
+            throw new InvalidOperationException(
+                $"Gofile share {code} contains no downloadable files. " +
+                "It may be empty, expired, or password-protected.");
+        }
+
+        string folderName = string.IsNullOrWhiteSpace(content.FolderName)
+            ? $"gofile-{code}"
+            : content.FolderName;
+
+        return new ResolvedHostFolder(
+            folderName,
+            FlattenFiles(content));
+    }
+
+    /// <summary>
+    /// Flattens nested subfolders: each file keeps its relative
+    /// path as a name prefix (sub/name.ext) so the queue can
+    /// rebuild the tree under the share folder.
+    /// </summary>
+    internal static IReadOnlyList<ResolvedHostFile> FlattenFiles(
+        GofileContent content)
+    {
+        var flat = new List<ResolvedHostFile>();
+
+        foreach (GofileEntry entry in content.Entries)
+        {
+            CollectEntry(entry, prefix: string.Empty, flat);
+        }
+
+        return flat.AsReadOnly();
+    }
+
+    private static void CollectEntry(
+        GofileEntry entry,
+        string prefix,
+        List<ResolvedHostFile> flat)
+    {
+        if (entry.File is not null)
+        {
+            string name = string.IsNullOrWhiteSpace(prefix)
+                ? entry.File.SuggestedFileName ?? "download"
+                : prefix + "/" +
+                    (entry.File.SuggestedFileName ?? "download");
+
+            flat.Add(entry.File with { SuggestedFileName = name });
+            return;
+        }
+
+        string folderPrefix = string.IsNullOrWhiteSpace(prefix)
+            ? entry.FolderName ?? "folder"
+            : prefix + "/" + (entry.FolderName ?? "folder");
+
+        foreach (GofileEntry child in entry.Children)
+        {
+            CollectEntry(child, folderPrefix, flat);
+        }
     }
 
     public static string? TryParseContentCode(Uri page)
@@ -235,8 +332,28 @@ public sealed class GofileResolver : IHostFileResolver
     }
 }
 
+/// <summary>
+/// Thrown when a folder share reaches the single-file path:
+/// the UI expands folders before batches, so this only fires
+/// when expansion was skipped.
+/// </summary>
+public sealed class FolderExpansionNeededException : Exception
+{
+    public FolderExpansionNeededException(string message)
+        : base(message)
+    {
+    }
+}
+
+internal sealed record GofileEntry(
+    ResolvedHostFile? File,
+    string? FolderName,
+    IReadOnlyList<GofileEntry> Children);
+
 internal sealed record GofileContent(
-    IReadOnlyList<ResolvedHostFile> Files);
+    string? FolderName,
+    IReadOnlyList<ResolvedHostFile> Files,
+    IReadOnlyList<GofileEntry> Entries);
 
 /// <summary>
 /// Pure parsing of the Gofile response envelope (status/data).
@@ -304,23 +421,27 @@ internal static class GofileResponses
                     "be expired or removed.");
             }
 
-            var files = new List<ResolvedHostFile>();
+            string? folderName =
+                data.TryGetProperty("name", out JsonElement nameElement) &&
+                nameElement.ValueKind == JsonValueKind.String
+                    ? nameElement.GetString()
+                    : null;
 
-            // Folders carry children keyed by file UUID; single
-            // files carry their own link.
+            var files = new List<ResolvedHostFile>();
+            var entries = new List<GofileEntry>();
+
+            // Folders carry children keyed by UUID; single files
+            // carry their own link.
             if (
                 data.TryGetProperty("children", out JsonElement children) &&
                 children.ValueKind == JsonValueKind.Object)
             {
                 foreach (JsonProperty child in children.EnumerateObject())
                 {
-                    ResolvedHostFile? file = ParseFileEntry(
-                        child.Value);
+                    GofileEntry entry = ParseEntry(child.Value);
 
-                    if (file is not null)
-                    {
-                        files.Add(file);
-                    }
+                    entries.Add(entry);
+                    CollectFiles(entry, files);
                 }
             }
             else
@@ -330,10 +451,14 @@ internal static class GofileResponses
                 if (single is not null)
                 {
                     files.Add(single);
+                    entries.Add(new GofileEntry(single, null, Array.Empty<GofileEntry>()));
                 }
             }
 
-            return new GofileContent(files.AsReadOnly());
+            return new GofileContent(
+                folderName,
+                files.AsReadOnly(),
+                entries.AsReadOnly());
         }
     }
 
@@ -371,6 +496,58 @@ internal static class GofileResponses
 
         return new InvalidOperationException(
             $"Gofile refused share {code} ({reason}).");
+    }
+
+    private static void CollectFiles(
+        GofileEntry entry,
+        List<ResolvedHostFile> files)
+    {
+        if (entry.File is not null)
+        {
+            files.Add(entry.File);
+            return;
+        }
+
+        foreach (GofileEntry child in entry.Children)
+        {
+            CollectFiles(child, files);
+        }
+    }
+
+    private static GofileEntry ParseEntry(JsonElement entry)
+    {
+        ResolvedHostFile? file = ParseFileEntry(entry);
+
+        if (file is not null)
+        {
+            return new GofileEntry(
+                file,
+                null,
+                Array.Empty<GofileEntry>());
+        }
+
+        string? folderName =
+            entry.TryGetProperty("name", out JsonElement nameElement) &&
+            nameElement.ValueKind == JsonValueKind.String
+                ? nameElement.GetString()
+                : null;
+
+        var children = new List<GofileEntry>();
+
+        if (
+            entry.TryGetProperty("children", out JsonElement nested) &&
+            nested.ValueKind == JsonValueKind.Object)
+        {
+            foreach (JsonProperty child in nested.EnumerateObject())
+            {
+                children.Add(ParseEntry(child.Value));
+            }
+        }
+
+        return new GofileEntry(
+            null,
+            folderName,
+            children.AsReadOnly());
     }
 
     private static ResolvedHostFile? ParseFileEntry(JsonElement entry)

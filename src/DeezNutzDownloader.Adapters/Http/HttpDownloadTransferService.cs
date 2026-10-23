@@ -70,6 +70,7 @@ public sealed class HttpDownloadTransferService
         Uri source = ValidateSource(request.Source);
         string? suggestedFileName = null;
         long? advertisedTotalBytes = null;
+        string? expectedSha256 = null;
         bool preferSuggestedName = false;
 
         // Host pages (/u/ID) become direct downloads first.
@@ -92,6 +93,7 @@ public sealed class HttpDownloadTransferService
             source = resolved.DownloadUri;
             suggestedFileName = resolved.SuggestedFileName;
             advertisedTotalBytes = resolved.TotalBytes;
+            expectedSha256 = resolved.ExpectedSha256;
             preferSuggestedName = true;
             break;
         }
@@ -435,6 +437,11 @@ public sealed class HttpDownloadTransferService
 
                 cancellationToken.ThrowIfCancellationRequested();
 
+                VerifyChecksum(
+                    temporaryPath,
+                    expectedSha256,
+                    source);
+
                 string destinationPath =
                     MoveToAvailableDestination(
                         temporaryPath,
@@ -463,6 +470,47 @@ public sealed class HttpDownloadTransferService
         }
     }
 
+    /// <summary>
+    /// Verifies a host-advertised SHA-256 (Pixeldrain) against the
+    /// finished temp file. The file is KEPT and the item is flagged
+    /// failed with its path, so the user inspects instead of the
+    /// app silently deleting evidence. No advertised hash: no-op.
+    /// </summary>
+    internal static void VerifyChecksum(
+        string temporaryPath,
+        string? expectedSha256,
+        Uri source)
+    {
+        if (string.IsNullOrWhiteSpace(expectedSha256))
+        {
+            return;
+        }
+
+        string actual;
+
+        using (var sha = System.Security.Cryptography.SHA256.Create())
+        using (Stream stream = File.OpenRead(temporaryPath))
+        {
+            byte[] hash = sha.ComputeHash(stream);
+            actual = Convert.ToHexString(hash);
+        }
+
+        if (
+            !actual.Equals(
+                expectedSha256.Trim(),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ChecksumMismatchException(
+                source,
+                temporaryPath,
+                $"The downloaded file failed its SHA-256 check " +
+                $"(expected {expectedSha256.Trim()[..16]}…, " +
+                $"got {actual[..16]}…). The file was KEPT at " +
+                $"{temporaryPath} for inspection — requeue to " +
+                "retry, or remove the item.");
+        }
+    }
+
     private async Task<DownloadTransferResult> DownloadViaMegaAsync(
         Uri source,
         string destinationDirectory,
@@ -482,10 +530,36 @@ public sealed class HttpDownloadTransferService
 
             if (metadata.IsFolder)
             {
-                throw new InvalidOperationException(
-                    "That MEGA link is a folder. Folder batch " +
-                    "expansion is coming — grab single-file links " +
-                    "for now.");
+                // MEGA folders cannot expand to per-file links
+                // (child keys never leave the folder session), so
+                // the one folder row downloads every file into a
+                // subfolder. Gofile/Pixeldrain folders expand to
+                // one row per file before the batch instead.
+                string folderDir = Path.Combine(
+                    destinationDirectory,
+                    SanitizeFileName(metadata.Name) ?? "mega-folder");
+
+                Directory.CreateDirectory(folderDir);
+
+                long folderBytes =
+                    await _megaDownloader.DownloadFolderToAsync(
+                            source,
+                            folderDir,
+                            progress,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+
+                cancellationToken.ThrowIfCancellationRequested();
+
+                pendingTemporaryPath = null;
+                TryDeleteTemporaryFile(temporaryPath);
+
+                return new DownloadTransferResult(
+                    source,
+                    folderDir,
+                    Path.GetFileName(folderDir),
+                    folderBytes,
+                    folderBytes);
             }
 
             await _megaDownloader.DownloadToAsync(

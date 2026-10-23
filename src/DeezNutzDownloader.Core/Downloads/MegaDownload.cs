@@ -5,6 +5,11 @@ public sealed record MegaFileMetadata(
     long Size,
     bool IsFolder);
 
+public sealed record MegaFolderFile(
+    string RelativePath,
+    string Name,
+    long Size);
+
 /// <summary>
 /// MEGA links carry their key in the fragment and serve encrypted
 /// bytes, so they bypass the generic HTTP transfer service.
@@ -20,6 +25,20 @@ public interface IMegaDownloader
         Uri link,
         string destinationPath,
         long? totalBytes,
+        IProgress<DownloadTransferProgress>? progress = null,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<MegaFolderFile>> ListFolderAsync(
+        Uri link,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Downloads every file in a folder link into destination
+    /// directory (flat, collision-safe). Returns total bytes.
+    /// </summary>
+    Task<long> DownloadFolderToAsync(
+        Uri link,
+        string destinationDirectory,
         IProgress<DownloadTransferProgress>? progress = null,
         CancellationToken cancellationToken = default);
 }

@@ -58,7 +58,8 @@ public interface IYtDlpMediaService
         string? proxyUrl = null,
         string? cookiesFromBrowser = null,
         bool downloadPlaylist = false,
-        long? limitBytesPerSecond = null);
+        long? limitBytesPerSecond = null,
+        string? subtitleLangs = null);
 }
 
 public static class YtDlpProbeParser
@@ -353,7 +354,8 @@ public static class YtDlpArgumentBuilder
         string? proxyUrl = null,
         string? cookiesFromBrowser = null,
         bool downloadPlaylist = false,
-        long? limitBytesPerSecond = null)
+        long? limitBytesPerSecond = null,
+        string? subtitleLangs = null)
     {
         var arguments = new List<string>
         {
@@ -380,6 +382,7 @@ public static class YtDlpArgumentBuilder
         AddProxy(arguments, proxyUrl);
         AddBrowserCookies(arguments, cookiesFromBrowser);
         AddRateLimit(arguments, limitBytesPerSecond);
+        AddSubtitles(arguments, subtitleLangs);
         arguments.Add(url);
         return arguments;
     }
@@ -393,6 +396,22 @@ public static class YtDlpArgumentBuilder
             arguments.Add("--limit-rate");
             arguments.Add(limitBytesPerSecond.Value.ToString());
         }
+    }
+
+    public static void AddSubtitles(
+        List<string> arguments,
+        string? subtitleLangs)
+    {
+        if (string.IsNullOrWhiteSpace(subtitleLangs))
+        {
+            return;
+        }
+
+        arguments.Add("--write-subs");
+        arguments.Add("--sub-langs");
+        arguments.Add(subtitleLangs.Trim());
+        arguments.Add("--convert-subs");
+        arguments.Add("srt");
     }
 
     private static void AddBrowserCookies(
@@ -557,7 +576,8 @@ public sealed class YtDlpMediaService : IYtDlpMediaService
         string? proxyUrl = null,
         string? cookiesFromBrowser = null,
         bool downloadPlaylist = false,
-        long? limitBytesPerSecond = null)
+        long? limitBytesPerSecond = null,
+        string? subtitleLangs = null)
     {
         Uri source = ValidateUrl(url);
 
@@ -595,7 +615,8 @@ public sealed class YtDlpMediaService : IYtDlpMediaService
                 proxyUrl,
                 cookiesFromBrowser,
                 downloadPlaylist,
-                limitBytesPerSecond);
+                limitBytesPerSecond,
+                subtitleLangs);
 
         ProcessResult result;
         try

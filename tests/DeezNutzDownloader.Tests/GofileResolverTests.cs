@@ -105,8 +105,8 @@ public sealed class GofileResolverTests
 
         using var client = new HttpClient(handler);
 
-        InvalidOperationException failure =
-            await Assert.ThrowsAsync<InvalidOperationException>(
+        FolderExpansionNeededException failure =
+            await Assert.ThrowsAsync<FolderExpansionNeededException>(
                 () => new GofileResolver().ResolveAsync(
                     new Uri("https://gofile.io/d/AbC123"),
                     client));

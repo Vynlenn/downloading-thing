@@ -12,7 +12,7 @@ namespace DeezNutzDownloader.Adapters.Http;
 /// as solvable challenges opening the /u/ page; quota errors stay
 /// throttled. Per https://pixeldrain.com/api.
 /// </summary>
-public sealed class PixeldrainResolver : IHostFileResolver
+public sealed class PixeldrainResolver : IHostFileResolver, IHostFolderResolver
 {
     public bool CanResolve(Uri page)
     {
@@ -82,7 +82,8 @@ public sealed class PixeldrainResolver : IHostFileResolver
         return new ResolvedHostFile(
             BuildDownloadUrl(fileId),
             info.Name,
-            info.SizeBytes);
+            info.SizeBytes,
+            info.Sha256Hex);
     }
 
     public static string? TryParseFileId(Uri page)
@@ -130,6 +131,104 @@ public sealed class PixeldrainResolver : IHostFileResolver
         return $"https://pixeldrain.com/u/{fileId}";
     }
 
+    public static string ListPageUrl(string listId)
+    {
+        return $"https://pixeldrain.com/l/{listId}";
+    }
+
+    public bool CanResolveFolder(Uri page)
+    {
+        return
+            page is not null &&
+            IsPixeldrainHost(page.Host) &&
+            TryParseListId(page) is not null;
+    }
+
+    /// <summary>
+    /// Resolves a /l/ list through /api/list/{id}: every file
+    /// becomes a ranged download with its real name, size, and
+    /// SHA-256 (per https://pixeldrain.com/api).
+    /// </summary>
+    public async Task<ResolvedHostFolder> ResolveFolderAsync(
+        Uri page,
+        HttpClient httpClient,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(page);
+        ArgumentNullException.ThrowIfNull(httpClient);
+
+        string? listId = TryParseListId(page);
+
+        if (listId is null)
+        {
+            throw new ArgumentException(
+                "Not a Pixeldrain list address.",
+                nameof(page));
+        }
+
+        string listJson;
+
+        try
+        {
+            using HttpResponseMessage response =
+                await httpClient.GetAsync(
+                        $"https://pixeldrain.com/api/list/{listId}",
+                        HttpCompletionOption.ResponseHeadersRead,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+            response.EnsureSuccessStatusCode();
+
+            listJson = await response.Content.ReadAsStringAsync(
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (HttpRequestException exception)
+        {
+            throw new InvalidOperationException(
+                $"Pixeldrain list {listId} could not be reached. " +
+                "Check the connection and try again.",
+                exception);
+        }
+
+        PixeldrainList list =
+            PixeldrainListParser.Parse(listJson, listId);
+
+        if (list.Files.Count == 0)
+        {
+            throw new InvalidOperationException(
+                $"Pixeldrain list {listId} contains no files. " +
+                "It may be empty or removed.");
+        }
+
+        string folderName = string.IsNullOrWhiteSpace(list.Title)
+            ? $"pixeldrain-{listId}"
+            : list.Title;
+
+        return new ResolvedHostFolder(
+            folderName,
+            list.Files);
+    }
+
+    public static string? TryParseListId(Uri page)
+    {
+        if (page is null || !IsPixeldrainHost(page.Host))
+        {
+            return null;
+        }
+
+        string[] segments = page.AbsolutePath
+            .Split('/', StringSplitOptions.RemoveEmptyEntries);
+
+        // /l/{id} list page.
+        if (segments.Length == 2 && segments[0] == "l")
+        {
+            return NormalizeId(segments[1]);
+        }
+
+        return null;
+    }
+
     private static bool IsPixeldrainHost(string host)
     {
         return
@@ -166,7 +265,106 @@ public sealed class PixeldrainResolver : IHostFileResolver
 public sealed record PixeldrainFileInfo(
     string FileId,
     string? Name,
-    long? SizeBytes);
+    long? SizeBytes,
+    string? Sha256Hex = null);
+
+public sealed record PixeldrainList(
+    string ListId,
+    string? Title,
+    IReadOnlyList<ResolvedHostFile> Files);
+
+/// <summary>
+/// Pure parsing of /api/list/{id} bodies (title + files[] with
+/// id/name/size per the API docs).
+/// </summary>
+public static class PixeldrainListParser
+{
+    public static PixeldrainList Parse(
+        string json,
+        string listId)
+    {
+        JsonDocument document;
+
+        try
+        {
+            document = JsonDocument.Parse(json ?? string.Empty);
+        }
+        catch (JsonException exception)
+        {
+            throw new InvalidOperationException(
+                $"Pixeldrain returned an unreadable list {listId}.",
+                exception);
+        }
+
+        using (document)
+        {
+            JsonElement root = document.RootElement;
+
+            bool success =
+                root.TryGetProperty("success", out JsonElement ok) &&
+                ok.ValueKind == JsonValueKind.True;
+
+            if (!success)
+            {
+                throw PixeldrainErrors.ToException(
+                    listId,
+                    PixeldrainErrors.ReadCode(root),
+                    PixeldrainErrors.ReadMessage(root));
+            }
+
+            string? title =
+                root.TryGetProperty("title", out JsonElement titleElement) &&
+                titleElement.ValueKind == JsonValueKind.String
+                    ? titleElement.GetString()
+                    : null;
+
+            var files = new List<ResolvedHostFile>();
+
+            if (
+                root.TryGetProperty("files", out JsonElement entries) &&
+                entries.ValueKind == JsonValueKind.Array)
+            {
+                foreach (JsonElement entry in entries.EnumerateArray())
+                {
+                    string? id =
+                        entry.TryGetProperty("id", out JsonElement idElement) &&
+                        idElement.ValueKind == JsonValueKind.String
+                            ? idElement.GetString()
+                            : null;
+
+                    if (string.IsNullOrWhiteSpace(id))
+                    {
+                        continue;
+                    }
+
+                    string? name =
+                        entry.TryGetProperty("name", out JsonElement nameElement) &&
+                        nameElement.ValueKind == JsonValueKind.String
+                            ? nameElement.GetString()
+                            : null;
+
+                    long? size =
+                        entry.TryGetProperty("size", out JsonElement sizeElement) &&
+                        sizeElement.ValueKind == JsonValueKind.Number &&
+                        sizeElement.TryGetInt64(out long parsed)
+                            ? parsed
+                            : null;
+
+                    files.Add(
+                        new ResolvedHostFile(
+                            PixeldrainResolver.BuildDownloadUrl(id),
+                            name,
+                            size));
+                }
+            }
+
+            return new PixeldrainList(
+                listId,
+                title,
+                files.AsReadOnly());
+        }
+    }
+}
 
 /// <summary>
 /// Pure parsing of /api/file/{id}/info bodies plus the documented
@@ -219,7 +417,24 @@ public static class PixeldrainInfoParser
                     ? parsed
                     : null;
 
-            return new PixeldrainFileInfo(fileId, name, size);
+            // Documented SHA-256 hex (per https://pixeldrain.com/api).
+            // Absent on older files — verification is skipped then.
+            string? sha256 =
+                root.TryGetProperty("hash_sha256", out JsonElement hashElement) &&
+                hashElement.ValueKind == JsonValueKind.String
+                    ? hashElement.GetString()
+                    : null;
+
+            if (
+                !string.IsNullOrWhiteSpace(sha256) &&
+                (sha256.Length != 64 ||
+                 !sha256.All(character =>
+                    char.IsAsciiHexDigit(character))))
+            {
+                sha256 = null;
+            }
+
+            return new PixeldrainFileInfo(fileId, name, size, sha256);
         }
     }
 }

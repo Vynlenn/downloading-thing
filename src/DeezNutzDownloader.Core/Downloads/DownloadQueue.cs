@@ -330,6 +330,129 @@ public sealed class DownloadQueue
         return result;
     }
 
+    /// <summary>
+    /// Queues one item per file from an expanded folder share.
+    /// File names may carry relative paths (sub/name.ext) which
+    /// become subfolders under the share folder. History and
+    /// in-queue duplicates count as already-queued.
+    /// </summary>
+    public DownloadQueueImportResult EnqueueHostFiles(
+        string folderName,
+        IReadOnlyList<Links.ResolvedHostFile> files,
+        Func<string, bool>? alreadyHave = null)
+    {
+        ArgumentNullException.ThrowIfNull(files);
+
+        DownloadQueueImportResult result;
+
+        lock (_sync)
+        {
+            int addedCount = 0;
+            int alreadyQueuedCount = 0;
+            int ignoredCount = 0;
+
+            string folder =
+                Links.PackageFolderNames.Sanitize(folderName);
+
+            foreach (Links.ResolvedHostFile file in files)
+            {
+                string url = file.DownloadUri.AbsoluteUri;
+
+                if (
+                    _queuedUrls.Contains(url) ||
+                    alreadyHave?.Invoke(url) == true)
+                {
+                    alreadyQueuedCount++;
+                    continue;
+                }
+
+                string? relative = CombineFolderPath(
+                    folder,
+                    file.SuggestedFileName);
+
+                if (relative is null)
+                {
+                    ignoredCount++;
+                    continue;
+                }
+
+                _queuedUrls.Add(url);
+
+                _items.Add(
+                    new DownloadQueueItem(
+                        Guid.NewGuid(),
+                        url,
+                        DisplayName: file.SuggestedFileName ??
+                            file.DownloadUri.Segments[^1].Trim('/'),
+                        PackageName: folder,
+                        RelativeFolder: relative));
+
+                addedCount++;
+            }
+
+            result = new DownloadQueueImportResult(
+                addedCount,
+                alreadyQueuedCount,
+                ignoredCount);
+        }
+
+        if (result.AddedCount > 0)
+        {
+            OnChanged();
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Joins a share folder with a host-advertised file path,
+    /// keeping every segment safe. Null when nothing usable
+    /// remains.
+    /// </summary>
+    internal static string? CombineFolderPath(
+        string folder,
+        string? filePath)
+    {
+        if (string.IsNullOrWhiteSpace(filePath))
+        {
+            return folder;
+        }
+
+        string[] segments = filePath
+            .Replace('\\', '/')
+            .Split('/', StringSplitOptions.RemoveEmptyEntries);
+
+        var safe = new List<string> { folder };
+
+        foreach (string segment in segments)
+        {
+            if (segment is "." or ".." || segment.Contains('\\'))
+            {
+                continue;
+            }
+
+            string cleaned =
+                Links.PackageFolderNames.Sanitize(segment);
+
+            if (cleaned is "package" or "_package")
+            {
+                continue;
+            }
+
+            safe.Add(cleaned);
+        }
+
+        if (safe.Count == 1)
+        {
+            return folder;
+        }
+
+        // Last segment is the filename; the rest are folders.
+        return string.Join(
+            Path.DirectorySeparatorChar,
+            safe);
+    }
+
     public DownloadQueueImportResult EnqueuePackages(
         IReadOnlyList<LinkPackage> packages,
         bool organizeIntoSiteFolders,

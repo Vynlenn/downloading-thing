@@ -127,7 +127,7 @@ public sealed class MegaTransferTests : IDisposable
     }
 
     [Fact]
-    public async Task Transfer_MegaFolder_ExplainsExpansion()
+    public async Task Transfer_MegaFolder_DownloadsIntoSubfolder()
     {
         var mega = new StubMega(
             new MegaFileMetadata("folder", 0, true),
@@ -138,15 +138,18 @@ public sealed class MegaTransferTests : IDisposable
             resolvers: null,
             megaDownloader: mega);
 
-        InvalidOperationException failure =
-            await Assert.ThrowsAsync<InvalidOperationException>(
-                () => service.DownloadAsync(
-                    new DownloadTransferRequest(
-                        new Uri(
-                            "https://mega.nz/folder/AbC123#key456789"),
-                        _directory)));
+        DownloadTransferResult result =
+            await service.DownloadAsync(
+                new DownloadTransferRequest(
+                    new Uri(
+                        "https://mega.nz/folder/AbC123#key456789"),
+                    _directory));
 
-        Assert.Contains("folder", failure.Message);
+        Assert.Equal("folder", result.FileName);
+        Assert.Equal(
+            Path.Combine(_directory, "folder"),
+            result.DestinationPath);
+        Assert.True(Directory.Exists(result.DestinationPath));
     }
 
     private sealed class StubMega : IMegaDownloader
@@ -181,6 +184,25 @@ public sealed class MegaTransferTests : IDisposable
                 _bytes.Length));
 
             return Task.FromResult(destinationPath);
+        }
+
+        public Task<IReadOnlyList<MegaFolderFile>> ListFolderAsync(
+            Uri link,
+            CancellationToken cancellationToken = default)
+        {
+            IReadOnlyList<MegaFolderFile> empty =
+                Array.Empty<MegaFolderFile>();
+
+            return Task.FromResult(empty);
+        }
+
+        public Task<long> DownloadFolderToAsync(
+            Uri link,
+            string destinationDirectory,
+            IProgress<DownloadTransferProgress>? progress = null,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(0L);
         }
     }
 

@@ -74,6 +74,13 @@ public sealed class AppSettings
     public string YtDlpCookiesFromBrowser { get; set; } = string.Empty;
 
     /// <summary>
+    /// Subtitle languages for video grabs (yt-dlp --sub-langs,
+    /// e.g. "en" or "en,de"). Empty disables subtitles.
+    /// Sidecar .srt files land next to the video.
+    /// </summary>
+    public string YtDlpSubtitleLangs { get; set; } = "en";
+
+    /// <summary>
     /// Quiet-hours speed cap: inside the window downloads run at
     /// QuietHoursCapKBps, outside it full speed. Off by default.
     /// </summary>

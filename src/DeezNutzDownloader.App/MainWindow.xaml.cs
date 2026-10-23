@@ -132,6 +132,8 @@ public partial class MainWindow : Window
         FFmpegPathTextBox.Text = _settings.FFmpegPath;
         YtDlpCookiesTextBox.Text =
             _settings.YtDlpCookiesFromBrowser;
+        YtDlpSubtitlesTextBox.Text =
+            _settings.YtDlpSubtitleLangs;
         AutoToolsCheckBox.IsChecked =
             _settings.ExternalToolsAutoUpdate;
         OrganizeFoldersCheckBox.IsChecked =
@@ -470,6 +472,12 @@ public partial class MainWindow : Window
                     ? null
                     : _settings.YtDlpCookiesFromBrowser.Trim();
 
+            string? subtitleLangs =
+                string.IsNullOrWhiteSpace(
+                    _settings.YtDlpSubtitleLangs)
+                    ? null
+                    : _settings.YtDlpSubtitleLangs.Trim();
+
             LinkGrabberStatusText.Text =
                 "Probing video formats with yt-dlp…";
 
@@ -533,7 +541,8 @@ public partial class MainWindow : Window
                         proxyUrl,
                         browserCookies,
                         grabPlaylist,
-                        ResolveBatchSpeedCap()));
+                        ResolveBatchSpeedCap(),
+                        subtitleLangs));
 
             _history.Record(
                 new DownloadHistoryEntry(
@@ -925,6 +934,28 @@ public partial class MainWindow : Window
                 ApplicationStatusText.Text =
                     "There are no queued, failed, or canceled " +
                     "downloads to start.";
+
+                RefreshDownloadQueue();
+                return;
+            }
+
+            // Folder shares (Gofile /d/, Pixeldrain /l/) expand to
+            // one queue item per file before the batch starts.
+            // MEGA folders stay single-row (child keys never leave
+            // the folder session) and download every file inside.
+            await ExpandFolderSharesAsync(
+                startableItems,
+                batchChallenges);
+
+            startableItems = _downloadQueue.Items
+                .Where(item => IsStartable(item.State))
+                .ToArray();
+
+            if (startableItems.Length == 0)
+            {
+                ApplicationStatusText.Text =
+                    "Folder expansion replaced every queued item — " +
+                    "press Start again to download the files.";
 
                 RefreshDownloadQueue();
                 return;
@@ -1380,6 +1411,112 @@ public partial class MainWindow : Window
                 $"{others.Count} RAR/7z archive" +
                 $"{(others.Count == 1 ? "" : "s")} need" +
                 " manual extraction (ZIP only for now).";
+        }
+    }
+
+    /// <summary>
+    /// Expands folder-share rows into per-file rows. The folder row
+    /// is removed only when expansion yields files; failures leave
+    /// the row for the transfer-time resolver to report, and
+    /// challenges join the batch solve flow.
+    /// </summary>
+    private async Task ExpandFolderSharesAsync(
+        DownloadQueueItem[] startableItems,
+        List<ChallengeDetectedException> batchChallenges)
+    {
+        using HttpClient client =
+            DownloadHttpClientFactory.Create(
+                _settings,
+                _challengeStore);
+
+        var folders = new IHostFolderResolver[]
+        {
+            new GofileResolver(),
+            new PixeldrainResolver(),
+        };
+
+        int expandedFolders = 0;
+        int expandedFiles = 0;
+
+        foreach (DownloadQueueItem item in startableItems)
+        {
+            if (_isClosing)
+            {
+                break;
+            }
+
+            if (
+                !Uri.TryCreate(item.Url, UriKind.Absolute, out Uri? page))
+            {
+                continue;
+            }
+
+            IHostFolderResolver? resolver = folders.FirstOrDefault(
+                candidate => candidate.CanResolveFolder(page));
+
+            if (resolver is null)
+            {
+                continue;
+            }
+
+            ResolvedHostFolder folder;
+
+            try
+            {
+                folder = await resolver.ResolveFolderAsync(
+                    page,
+                    client);
+            }
+            catch (ChallengeDetectedException challenge)
+            {
+                lock (batchChallenges)
+                {
+                    batchChallenges.Add(challenge);
+                }
+
+                continue;
+            }
+            catch
+            {
+                continue;
+            }
+
+            if (folder.Files.Count == 0)
+            {
+                continue;
+            }
+
+            DownloadQueueImportResult added =
+                _downloadQueue.EnqueueHostFiles(
+                    folder.FolderName,
+                    folder.Files,
+                    _history.Contains);
+
+            if (added.AddedCount == 0)
+            {
+                continue;
+            }
+
+            _downloadQueue.Remove(item.Id);
+            expandedFolders++;
+            expandedFiles += added.AddedCount;
+
+            await PersistQueueAsync();
+        }
+
+        if (expandedFolders > 0)
+        {
+            RefreshDownloadQueue();
+
+            ApplicationStatusText.Text =
+                $"Expanded {expandedFolders} folder" +
+                $"{(expandedFolders == 1 ? "" : "s")} into " +
+                $"{expandedFiles} file" +
+                $"{(expandedFiles == 1 ? "" : "s")}. Starting…";
+
+            await _log.InformationAsync(
+                $"Folder expansion: {expandedFolders} folders, " +
+                $"{expandedFiles} files.");
         }
     }
 
@@ -2160,6 +2297,8 @@ public partial class MainWindow : Window
             _settings.FFmpegPath = FFmpegPathTextBox.Text.Trim();
             _settings.YtDlpCookiesFromBrowser =
                 YtDlpCookiesTextBox.Text.Trim();
+            _settings.YtDlpSubtitleLangs =
+                YtDlpSubtitlesTextBox.Text.Trim();
             _settings.ExternalToolsAutoUpdate =
                 AutoToolsCheckBox.IsChecked != false;
             _settings.OrganizeIntoSiteFolders =
