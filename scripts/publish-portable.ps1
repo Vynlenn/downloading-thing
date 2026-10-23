@@ -2,6 +2,13 @@
 # portable.flag so settings travel with the folder. yt-dlp,
 # ffmpeg, and the WebView2 runtime resolve on first run (small
 # zip by design); user data is never included.
+param(
+    # Overrides the <Version> in the App csproj. The release
+    # workflow passes the tag version so the zip, the binary, and
+    # the tag can never disagree (a mismatch would make the updater
+    # offer the same update forever).
+    [string]$Version = ""
+)
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $Root
@@ -9,14 +16,19 @@ Set-Location -LiteralPath $Root
 $Configuration = "Release"
 $Runtime = "win-x64"
 $PublishDir = Join-Path (Join-Path $Root "publish") "portable"
-$Version = "0.1.0"
 
 $Csproj = Join-Path $Root "src/DeezNutzDownloader.App/DeezNutzDownloader.App.csproj"
-[xml]$Xml = Get-Content -LiteralPath $Csproj
-$Configured = $Xml.SelectSingleNode("//Version")
-if ($Configured -and $Configured.InnerText.Trim()) {
-    $Version = $Configured.InnerText.Trim()
+if ([string]::IsNullOrWhiteSpace($Version)) {
+    $Version = "0.1.0"
+    [xml]$Xml = Get-Content -LiteralPath $Csproj
+    $Configured = $Xml.SelectSingleNode("//Version")
+    if ($Configured -and $Configured.InnerText.Trim()) {
+        $Version = $Configured.InnerText.Trim()
+    }
 }
+
+# /p:Version flows into the binary so the updater compares the zip
+# name, the tag, and the running build as the same version.
 
 Write-Host "Publishing portable $Version..."
 if (Test-Path $PublishDir) {
@@ -27,6 +39,7 @@ dotnet publish $Csproj `
     --configuration $Configuration `
     --runtime $Runtime `
     --self-contained true `
+    /p:Version=$Version `
     /p:PublishSingleFile=true `
     /p:IncludeNativeLibrariesForSelfExtract=true `
     --output $PublishDir
