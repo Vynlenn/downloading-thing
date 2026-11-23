@@ -118,15 +118,6 @@ public static class ProxyConfiguration
 
     private static Uri BuildManualAddress(AppSettings settings)
     {
-        if (
-            settings.ProxyType is ProxyType.Socks4 or ProxyType.Socks5
-        )
-        {
-            throw new InvalidOperationException(
-                "SOCKS proxies are not supported in this version. " +
-                "Choose HTTP or HTTPS as the proxy type.");
-        }
-
         if (string.IsNullOrWhiteSpace(settings.ProxyHost))
         {
             throw new InvalidOperationException(
@@ -152,10 +143,16 @@ public static class ProxyConfiguration
                 "address; choose its type and port separately.");
         }
 
+        // .NET's HTTP stack and yt-dlp both speak SOCKS. SOCKS4a
+        // (not plain 4) so host names resolve at the proxy and DNS
+        // lookups do not leak around it; SOCKS5 sends names too and
+        // supports a username and password.
         string scheme = settings.ProxyType switch
         {
             ProxyType.Http => "http",
             ProxyType.Https => "https",
+            ProxyType.Socks4 => "socks4a",
+            ProxyType.Socks5 => "socks5",
             _ => throw new InvalidOperationException(
                 "The saved proxy type is unsupported."),
         };

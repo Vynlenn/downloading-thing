@@ -63,6 +63,14 @@ public sealed class AppSettings
 
     public string FFmpegPath { get; set; } = string.Empty;
 
+    /// <summary>
+    /// 7z.exe for RAR/7z extraction. Empty: find an installed 7-Zip.
+    /// </summary>
+    public string SevenZipPath { get; set; } = string.Empty;
+
+    /// <summary>Minimizing hides the window to the notification area.</summary>
+    public bool MinimizeToTray { get; set; }
+
     public bool OrganizeIntoSiteFolders { get; set; } = true;
 
     public bool ClipboardWatchEnabled { get; set; } = true;

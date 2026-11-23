@@ -122,10 +122,13 @@ internal sealed class SegmentedDownloader
         int connections,
         RangeConditionHeaderValue? validator,
         IProgress<DownloadTransferProgress>? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlyList<PartialSegment>? resumeSegments = null,
+        Action<IReadOnlyList<PartialSegment>>? persist = null)
     {
         // Reserve the whole file up front: a full disk fails now,
-        // not after minutes of downloading.
+        // not after minutes of downloading. On resume the file is
+        // already this size and its saved ranges stay intact.
         using (
             var reserve = new FileStream(
                 path,
@@ -155,34 +158,56 @@ internal sealed class SegmentedDownloader
             progress,
             abort);
 
-        long segmentLength = totalBytes / connections;
-        var workers = new Task[connections];
+        List<Segment> initial =
+            BuildInitialSegments(totalBytes, connections, resumeSegments);
+
+        Segment[] owned;
 
         lock (run.Sync)
         {
-            for (int index = 0; index < connections; index++)
+            run.Segments.AddRange(initial);
+
+            // Unfinished ranges beyond the worker count start as
+            // orphans; finishing workers claim them.
+            owned = initial
+                .Where(segment => !segment.Done)
+                .Take(connections)
+                .ToArray();
+
+            foreach (Segment segment in owned)
             {
-                long start = index * segmentLength;
-                long end = index == connections - 1
-                    ? totalBytes
-                    : start + segmentLength;
-
-                var segment = new Segment(start, end)
-                {
-                    Owned = true
-                };
-
-                run.Segments.Add(segment);
-                run.ActiveWorkers++;
+                segment.Owned = true;
             }
+
+            run.ActiveWorkers = owned.Length;
         }
 
-        for (int index = 0; index < connections; index++)
+        run.InitializeBytes(
+            initial.Sum(segment => segment.Confirmed - segment.Start));
+
+        using var saverStop = new CancellationTokenSource();
+
+        Task saver = persist is null
+            ? Task.CompletedTask
+            : PersistLoopAsync(run, persist, saverStop.Token);
+
+        try
         {
-            workers[index] = WorkerAsync(run, run.Segments[index]);
-        }
+            Task[] workers = owned
+                .Select(segment => WorkerAsync(run, segment))
+                .ToArray();
 
-        await Task.WhenAll(workers).ConfigureAwait(false);
+            await Task.WhenAll(workers).ConfigureAwait(false);
+        }
+        finally
+        {
+            saverStop.Cancel();
+            await saver.ConfigureAwait(false);
+
+            // Final map: what a cancel, pause or failure leaves on
+            // disk is exactly what the next attempt resumes from.
+            persist?.Invoke(run.Snapshot());
+        }
 
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -198,7 +223,7 @@ internal sealed class SegmentedDownloader
 
         lock (run.Sync)
         {
-            if (run.Segments.Any(segment => !segment.Done))
+            if (run.Segments.Any(segment => segment.Confirmed < segment.End))
             {
                 throw new IOException(
                     $"The segmented download from {source.Host} ended " +
@@ -208,6 +233,65 @@ internal sealed class SegmentedDownloader
 
         run.ReportProgress(force: true);
         return true;
+    }
+
+    private static List<Segment> BuildInitialSegments(
+        long totalBytes,
+        int connections,
+        IReadOnlyList<PartialSegment>? resumeSegments)
+    {
+        if (resumeSegments is { Count: > 0 })
+        {
+            return resumeSegments
+                .Select(saved =>
+                {
+                    long start = Math.Clamp(saved.Start, 0, totalBytes);
+                    long end = Math.Clamp(saved.End, start, totalBytes);
+                    long confirmed = Math.Clamp(saved.Confirmed, start, end);
+
+                    return new Segment(start, end)
+                    {
+                        Position = confirmed,
+                        Confirmed = confirmed
+                    };
+                })
+                .ToList();
+        }
+
+        long segmentLength = totalBytes / connections;
+        var segments = new List<Segment>(connections);
+
+        for (int index = 0; index < connections; index++)
+        {
+            long start = index * segmentLength;
+            long end = index == connections - 1
+                ? totalBytes
+                : start + segmentLength;
+
+            segments.Add(new Segment(start, end));
+        }
+
+        return segments;
+    }
+
+    private static async Task PersistLoopAsync(
+        Run run,
+        Action<IReadOnlyList<PartialSegment>> persist,
+        CancellationToken token)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(2));
+
+        try
+        {
+            while (await timer.WaitForNextTickAsync(token).ConfigureAwait(false))
+            {
+                persist(run.Snapshot());
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // The download finished or stopped; the caller saves last.
+        }
     }
 
     private async Task WorkerAsync(Run run, Segment first)
@@ -527,6 +611,13 @@ internal sealed class SegmentedDownloader
                 throw new SegmentWriteException(exception);
             }
 
+            // Only bytes that actually reached the file count as
+            // saved for resume; reservations alone never do.
+            lock (run.Sync)
+            {
+                segment.Confirmed = offset + allowed;
+            }
+
             run.AddBytes(allowed);
 
             if (allowed < read)
@@ -556,11 +647,19 @@ internal sealed class SegmentedDownloader
     {
         public Segment(long start, long end)
         {
+            Start = start;
             Position = start;
+            Confirmed = start;
             End = end;
         }
 
+        public long Start { get; }
+
+        /// <summary>Next offset to hand out (reserved, maybe not yet written).</summary>
         public long Position { get; set; }
+
+        /// <summary>Everything before this is on disk.</summary>
+        public long Confirmed { get; set; }
 
         public long End { get; set; }
 
@@ -631,6 +730,25 @@ internal sealed class SegmentedDownloader
                 catch (ObjectDisposedException)
                 {
                 }
+            }
+        }
+
+        public void InitializeBytes(long alreadySaved)
+        {
+            Interlocked.Exchange(ref _bytesWritten, alreadySaved);
+        }
+
+        public IReadOnlyList<PartialSegment> Snapshot()
+        {
+            lock (Sync)
+            {
+                return Segments
+                    .Select(segment =>
+                        new PartialSegment(
+                            segment.Start,
+                            segment.Confirmed,
+                            segment.End))
+                    .ToArray();
             }
         }
 
