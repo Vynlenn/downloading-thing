@@ -60,6 +60,15 @@ public static class HostThrottlePolicy
             return true;
         }
 
+        // Bunkr rotates domains; one file at a time on all of them
+        // (each download also opens a browser window).
+        if (
+            Links.BunkrLinks.IsBunkrHost(normalized) ||
+            Links.FilesterLinks.IsFilesterHost(normalized))
+        {
+            return true;
+        }
+
         // Subdomains inherit the policy, e.g. dl.pixeldrain.com.
         foreach (string gated in SingleLaneHosts)
         {

@@ -74,6 +74,15 @@ public static class ThemeManager
 
             resources["ErrorBrush"] =
                 Brush("#FFF87171");
+
+            resources["WarningBrush"] =
+                Brush("#FFFBBF24");
+
+            resources["WarningSoftBrush"] =
+                Brush("#FF3A2E0C");
+
+            resources["ErrorSoftBrush"] =
+                Brush("#FF3B1414");
         }
         else
         {
@@ -130,6 +139,15 @@ public static class ThemeManager
 
             resources["ErrorBrush"] =
                 Brush("#FFB91C1C");
+
+            resources["WarningBrush"] =
+                Brush("#FF92400E");
+
+            resources["WarningSoftBrush"] =
+                Brush("#FFFEF3C7");
+
+            resources["ErrorSoftBrush"] =
+                Brush("#FFFEE2E2");
         }
     }
 

@@ -140,8 +140,12 @@ public sealed class DownloadQueueTests
             DownloadQueueItemState.Queued,
             retried.State);
         Assert.Null(retried.ErrorMessage);
-        Assert.Equal(0, retried.BytesReceived);
-        Assert.Null(retried.TotalBytes);
+
+        // Saved progress survives a retry: the partial file on disk
+        // resumes from it instead of starting over.
+        Assert.Equal(100, retried.BytesReceived);
+        Assert.Equal<long?>(200, retried.TotalBytes);
+        Assert.Contains("Waiting to resume", retried.ProgressText);
         Assert.True(retried.CanRemove);
         Assert.False(retried.CanRetry);
     }
@@ -226,8 +230,10 @@ public sealed class DownloadQueueTests
         Assert.Equal(
             DownloadQueueItemState.Queued,
             queue.Items[0].State);
-        Assert.Equal(0, queue.Items[0].BytesReceived);
-        Assert.Null(queue.Items[0].TotalBytes);
+        // An item interrupted mid-transfer keeps its saved bytes so
+        // the restart resumes its partial file.
+        Assert.Equal(1234, queue.Items[0].BytesReceived);
+        Assert.Equal<long?>(5678, queue.Items[0].TotalBytes);
         Assert.Equal("network error", queue.Items[1].ErrorMessage);
     }
 

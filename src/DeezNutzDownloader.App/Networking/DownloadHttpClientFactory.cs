@@ -44,6 +44,17 @@ internal static class DownloadHttpClientFactory
 
         HttpMessageHandler pipeline = handler;
 
+        // The user's own Pixeldrain key (Pro lifts the free quota).
+        // Added per request, only for HTTPS Pixeldrain hosts.
+        string? pixeldrainKey =
+            ProxyCredentialProtector.Unprotect(
+                settings.PixeldrainApiKeyProtected);
+
+        if (!string.IsNullOrWhiteSpace(pixeldrainKey))
+        {
+            pipeline = new PixeldrainAuthHandler(pixeldrainKey, pipeline);
+        }
+
         if (sessionStore is not null)
         {
             // Solved-challenge cookies replay per host; without a

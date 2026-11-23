@@ -91,17 +91,31 @@ public sealed class ProxyConfigurationTests
             () => ProxyConfiguration.Resolve(settings));
     }
 
+    [Theory]
+    [InlineData(ProxyType.Socks5, "socks5")]
+    [InlineData(ProxyType.Socks4, "socks4a")]
+    public void Resolve_Socks_UsesSocksScheme(ProxyType type, string scheme)
+    {
+        var settings = ManualSettings();
+        settings.ProxyType = type;
+
+        ResolvedProxy resolved = ProxyConfiguration.Resolve(settings);
+
+        Uri? proxy = resolved.Proxy!.GetProxy(new Uri("https://example.test/"));
+        Assert.Equal(scheme, proxy!.Scheme);
+    }
+
     [Fact]
-    public void Resolve_Socks5_ThrowsNotSupported()
+    public void BuildYtDlpProxyUrl_Socks5_CarriesSchemeAndCredentials()
     {
         var settings = ManualSettings();
         settings.ProxyType = ProxyType.Socks5;
+        settings.ProxyUsername = "me";
 
-        InvalidOperationException exception =
-            Assert.Throws<InvalidOperationException>(
-                () => ProxyConfiguration.Resolve(settings));
+        string? url = ProxyConfiguration.BuildYtDlpProxyUrl(settings, "p@ss");
 
-        Assert.Contains("SOCKS", exception.Message);
+        Assert.NotNull(url);
+        Assert.StartsWith("socks5://me:p%40ss@", url);
     }
 
     [Fact]

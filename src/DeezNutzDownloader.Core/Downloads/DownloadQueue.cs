@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using DeezNutzDownloader.Core.Links;
 
 namespace DeezNutzDownloader.Core.Downloads;
@@ -8,7 +9,21 @@ public enum DownloadQueueItemState
     Downloading,
     Completed,
     Failed,
-    Canceled
+    Canceled,
+
+    /// <summary>Stopped on purpose; partial file kept. Start all skips it.</summary>
+    Paused
+}
+
+/// <summary>Result of checking a link before downloading it.</summary>
+public enum LinkCheckStatus
+{
+    Unchecked,
+    Online,
+    Offline,
+    NeedsAttention,
+    Limited,
+    Unknown
 }
 
 public sealed record DownloadQueueItem(
@@ -24,9 +39,44 @@ public sealed record DownloadQueueItem(
     string? ErrorMessage = null,
     long? SpeedBytesPerSecond = null,
     string? PackageName = null,
-    string? RelativeFolder = null)
+    string? RelativeFolder = null,
+    DateTimeOffset? RetryAfterUtc = null,
+    int AutoRetryCount = 0,
+    LinkCheckStatus LinkStatus = LinkCheckStatus.Unchecked,
+    string? LinkStatusMessage = null,
+    bool PreferBrowser = false)
 {
-    public string Status => State.ToString();
+    public string Status =>
+        State == DownloadQueueItemState.Queued && RetryAfterUtc.HasValue
+            ? "Waiting"
+            : State.ToString();
+
+    public bool CanPause =>
+        State is
+            DownloadQueueItemState.Downloading or
+            DownloadQueueItemState.Queued;
+
+    public bool CanResume =>
+        State is
+            DownloadQueueItemState.Paused or
+            DownloadQueueItemState.Failed or
+            DownloadQueueItemState.Canceled;
+
+    public bool CanOpen =>
+        State == DownloadQueueItemState.Completed &&
+        !string.IsNullOrWhiteSpace(DestinationPath);
+
+    [JsonIgnore]
+    public string? LinkStatusText =>
+        LinkStatus switch
+        {
+            LinkCheckStatus.Online => "Online",
+            LinkCheckStatus.Offline => "Offline",
+            LinkCheckStatus.NeedsAttention => "Needs attention",
+            LinkCheckStatus.Limited => "Host limit",
+            LinkCheckStatus.Unknown => "Unknown",
+            _ => null
+        };
 
     public bool IsActive =>
         State == DownloadQueueItemState.Downloading;
@@ -46,6 +96,21 @@ public sealed record DownloadQueueItem(
         string.IsNullOrWhiteSpace(SavedFileName)
             ? DisplayName
             : SavedFileName;
+
+    /// <summary>
+    /// Re-evaluated from the current name, so the warning updates
+    /// when the server's real filename replaces the URL guess.
+    /// </summary>
+    [JsonIgnore]
+    public FileSafetyAssessment Safety =>
+        FileTypeSafety.Assess(EffectiveDisplayName);
+
+    [JsonIgnore]
+    public string? SafetyWarning => Safety.Message;
+
+    [JsonIgnore]
+    public bool IsDangerous =>
+        Safety.Level == FileSafetyLevel.Danger;
 
     public double ProgressPercentage
     {
@@ -109,8 +174,22 @@ public sealed record DownloadQueueItem(
     public string ProgressText =>
         State switch
         {
+            DownloadQueueItemState.Queued
+                when RetryAfterUtc is DateTimeOffset retryAt =>
+                $"Host limit - retrying at {retryAt.ToLocalTime():HH:mm}" +
+                FormatSavedSuffix(),
+
+            DownloadQueueItemState.Queued when BytesReceived > 0 =>
+                "Waiting to resume" + FormatSavedSuffix(),
+
+            DownloadQueueItemState.Queued when PreferBrowser =>
+                "Waiting to start (downloads in the built-in browser)",
+
             DownloadQueueItemState.Queued =>
                 "Waiting to start",
+
+            DownloadQueueItemState.Paused =>
+                "Paused" + FormatSavedSuffix(),
 
             DownloadQueueItemState.Downloading
                 when TotalBytes is long totalBytes =>
@@ -141,6 +220,18 @@ public sealed record DownloadQueueItem(
             _ =>
                 string.Empty
         };
+
+    private string FormatSavedSuffix()
+    {
+        if (BytesReceived <= 0)
+        {
+            return string.Empty;
+        }
+
+        return TotalBytes is long total
+            ? $" · {FormatBytes(BytesReceived)} of {FormatBytes(total)} saved"
+            : $" · {FormatBytes(BytesReceived)} saved";
+    }
 
     private string FormatSpeedSuffix()
     {
@@ -384,6 +475,7 @@ public sealed class DownloadQueue
                         url,
                         DisplayName: file.SuggestedFileName ??
                             file.DownloadUri.Segments[^1].Trim('/'),
+                        TotalBytes: file.TotalBytes is > 0 ? file.TotalBytes : null,
                         PackageName: folder,
                         RelativeFolder: relative));
 
@@ -638,7 +730,8 @@ public sealed class DownloadQueue
                 DestinationPath = null,
                 SavedFileName = null,
                 ErrorMessage = null,
-                SpeedBytesPerSecond = null
+                SpeedBytesPerSecond = null,
+                RetryAfterUtc = null
             };
 
             _speedSamples[current.Id] =
@@ -896,15 +989,16 @@ public sealed class DownloadQueue
 
             DownloadQueueItem current = _items[index];
 
+            // Saved bytes stay visible: the partial file resumes.
             _items[index] = current with
             {
                 State = DownloadQueueItemState.Queued,
-                BytesReceived = 0,
-                TotalBytes = null,
                 DestinationPath = null,
                 SavedFileName = null,
                 ErrorMessage = null,
-                SpeedBytesPerSecond = null
+                SpeedBytesPerSecond = null,
+                RetryAfterUtc = null,
+                AutoRetryCount = 0
             };
 
             _speedSamples.Remove(current.Id);
@@ -917,6 +1011,205 @@ public sealed class DownloadQueue
             OnChanged();
         }
 
+        return true;
+    }
+
+    /// <summary>Pauses a waiting item (active ones go through the orchestrator).</summary>
+    public bool TryPause(Guid itemId)
+    {
+        return Update(
+            itemId,
+            current => current.State is
+                DownloadQueueItemState.Queued or
+                DownloadQueueItemState.Failed or
+                DownloadQueueItemState.Canceled,
+            current => current with
+            {
+                State = DownloadQueueItemState.Paused,
+                RetryAfterUtc = null,
+                SpeedBytesPerSecond = null
+            });
+    }
+
+    /// <summary>Puts a paused, failed or canceled item back in line, keeping its progress.</summary>
+    public bool TryResume(Guid itemId)
+    {
+        return TryResetForRetry(itemId);
+    }
+
+    internal bool TryMarkPaused(Guid itemId)
+    {
+        bool changed = Update(
+            itemId,
+            current => current.State == DownloadQueueItemState.Downloading,
+            current => current with
+            {
+                State = DownloadQueueItemState.Paused,
+                DestinationPath = null,
+                SavedFileName = null,
+                ErrorMessage = null,
+                SpeedBytesPerSecond = null
+            });
+
+        if (changed)
+        {
+            lock (_sync)
+            {
+                _speedSamples.Remove(itemId);
+            }
+        }
+
+        return changed;
+    }
+
+    /// <summary>
+    /// A host limit stopped the transfer: back to the line with a
+    /// time before which it must not start again.
+    /// </summary>
+    internal bool TryMarkWaiting(
+        Guid itemId,
+        DateTimeOffset retryAtUtc,
+        string message)
+    {
+        bool changed = Update(
+            itemId,
+            current => current.State == DownloadQueueItemState.Downloading,
+            current => current with
+            {
+                State = DownloadQueueItemState.Queued,
+                RetryAfterUtc = retryAtUtc,
+                AutoRetryCount = current.AutoRetryCount + 1,
+                ErrorMessage = NormalizeErrorMessage(message),
+                SpeedBytesPerSecond = null,
+                DestinationPath = null,
+                SavedFileName = null
+            });
+
+        if (changed)
+        {
+            lock (_sync)
+            {
+                _speedSamples.Remove(itemId);
+            }
+        }
+
+        return changed;
+    }
+
+    /// <summary>
+    /// Queues an item again to download through the embedded browser
+    /// (for links that answer with a page instead of the file).
+    /// </summary>
+    public bool TryRequeueViaBrowser(Guid itemId)
+    {
+        return Update(
+            itemId,
+            current => current.State != DownloadQueueItemState.Downloading,
+            current => current with
+            {
+                State = DownloadQueueItemState.Queued,
+                PreferBrowser = true,
+                BytesReceived = 0,
+                TotalBytes = null,
+                DestinationPath = null,
+                SavedFileName = null,
+                ErrorMessage = null,
+                SpeedBytesPerSecond = null,
+                RetryAfterUtc = null,
+                AutoRetryCount = 0
+            });
+    }
+
+    public bool SetLinkStatus(
+        Guid itemId,
+        LinkCheckStatus status,
+        string? message,
+        string? suggestedName = null,
+        long? totalBytes = null)
+    {
+        return Update(
+            itemId,
+            current => current.State != DownloadQueueItemState.Downloading,
+            current => current with
+            {
+                LinkStatus = status,
+                LinkStatusMessage = string.IsNullOrWhiteSpace(message)
+                    ? null
+                    : NormalizeErrorMessage(message),
+                DisplayName =
+                    string.IsNullOrWhiteSpace(suggestedName) ||
+                    current.State == DownloadQueueItemState.Completed
+                        ? current.DisplayName
+                        : suggestedName.Trim(),
+                TotalBytes = current.TotalBytes ??
+                    (totalBytes is > 0 ? totalBytes : null)
+            });
+    }
+
+    /// <summary>Moves an item up (negative) or down (positive) in the line.</summary>
+    public bool Move(Guid itemId, int offset)
+    {
+        bool moved;
+
+        lock (_sync)
+        {
+            int index = _items.FindIndex(item => item.Id == itemId);
+
+            if (index < 0 || offset == 0)
+            {
+                return false;
+            }
+
+            int target = Math.Clamp(index + offset, 0, _items.Count - 1);
+
+            if (target == index)
+            {
+                return false;
+            }
+
+            DownloadQueueItem item = _items[index];
+            _items.RemoveAt(index);
+            _items.Insert(target, item);
+            moved = true;
+        }
+
+        if (moved)
+        {
+            OnChanged();
+        }
+
+        return moved;
+    }
+
+    /// <summary>"Download next": first in line among items not yet finished.</summary>
+    public bool MoveToFront(Guid itemId)
+    {
+        return Move(itemId, int.MinValue / 2);
+    }
+
+    public bool MoveToBack(Guid itemId)
+    {
+        return Move(itemId, int.MaxValue / 2);
+    }
+
+    private bool Update(
+        Guid itemId,
+        Func<DownloadQueueItem, bool> allowed,
+        Func<DownloadQueueItem, DownloadQueueItem> change)
+    {
+        lock (_sync)
+        {
+            int index = _items.FindIndex(item => item.Id == itemId);
+
+            if (index < 0 || !allowed(_items[index]))
+            {
+                return false;
+            }
+
+            _items[index] = change(_items[index]);
+        }
+
+        OnChanged();
         return true;
     }
 
@@ -944,6 +1237,8 @@ public sealed class DownloadQueue
                         DownloadQueueItemState.Completed or
                         DownloadQueueItemState.Failed or
                         DownloadQueueItemState.Canceled);
+
+            // Paused items are kept: pausing means "later", not "done".
 
             removedCount = beforeCount - _items.Count;
 
@@ -1015,13 +1310,11 @@ public sealed class DownloadQueue
                         normalizedUrl,
                         displayName,
                         state,
-                        state == DownloadQueueItemState.Queued
-                            ? 0
-                            : Math.Max(0, persisted.BytesReceived),
-                        state == DownloadQueueItemState.Queued
-                            ? null
-                            : NormalizeTotalBytes(
-                                persisted.TotalBytes),
+                        // Saved bytes are kept for every state: a
+                        // partial file on disk resumes from them.
+                        Math.Max(0, persisted.BytesReceived),
+                        NormalizeTotalBytes(
+                            persisted.TotalBytes),
                         state
                             is DownloadQueueItemState.Completed
                             ? persisted.DestinationPath
@@ -1042,7 +1335,16 @@ public sealed class DownloadQueue
                         PackageFolderNames.IsSafeSegment(
                             persisted.RelativeFolder)
                             ? persisted.RelativeFolder
-                            : null));
+                            : null,
+                        state == DownloadQueueItemState.Queued
+                            ? persisted.RetryAfterUtc
+                            : null,
+                        0,
+                        Enum.IsDefined(persisted.LinkStatus)
+                            ? persisted.LinkStatus
+                            : LinkCheckStatus.Unchecked,
+                        persisted.LinkStatusMessage,
+                        persisted.PreferBrowser));
             }
         }
 
@@ -1054,7 +1356,8 @@ public sealed class DownloadQueue
     {
         return state is
             DownloadQueueItemState.Failed or
-            DownloadQueueItemState.Canceled;
+            DownloadQueueItemState.Canceled or
+            DownloadQueueItemState.Paused;
     }
 
     private static long? NormalizeTotalBytes(
@@ -1145,13 +1448,21 @@ public sealed class DownloadQueue
         public double SmoothedBytesPerSecond { get; }
     }
 
-    private static bool IsStartable(
+    internal static bool IsStartable(
         DownloadQueueItemState state)
     {
         return state is
             DownloadQueueItemState.Queued or
             DownloadQueueItemState.Failed or
             DownloadQueueItemState.Canceled;
+    }
+
+    internal DownloadQueueItem? Find(Guid itemId)
+    {
+        lock (_sync)
+        {
+            return _items.Find(item => item.Id == itemId);
+        }
     }
 
     private static string NormalizeErrorMessage(

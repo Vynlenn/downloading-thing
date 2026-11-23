@@ -46,15 +46,36 @@ public sealed class AppSettings
     /// </summary>
     public string ProxyPasswordProtected { get; set; } = string.Empty;
 
+    /// <summary>
+    /// The user's Pixeldrain API key, DPAPI-encrypted like the proxy
+    /// password. The cleartext key is never persisted.
+    /// </summary>
+    public string PixeldrainApiKeyProtected { get; set; } = string.Empty;
+
     public bool AskBeforeArchiveExtraction { get; set; } = true;
 
     public bool SkipExactDuplicates { get; set; } = true;
 
     public int MaximumConcurrentDownloads { get; set; } = 3;
 
+    /// <summary>
+    /// Parallel range connections per large file (1 = off). Only
+    /// used on servers that support ranges; free file hosts always
+    /// get a single connection.
+    /// </summary>
+    public int ConnectionsPerDownload { get; set; } = 4;
+
     public string YtDlpPath { get; set; } = string.Empty;
 
     public string FFmpegPath { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 7z.exe for RAR/7z extraction. Empty: find an installed 7-Zip.
+    /// </summary>
+    public string SevenZipPath { get; set; } = string.Empty;
+
+    /// <summary>Minimizing hides the window to the notification area.</summary>
+    public bool MinimizeToTray { get; set; }
 
     public bool OrganizeIntoSiteFolders { get; set; } = true;
 

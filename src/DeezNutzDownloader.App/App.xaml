@@ -23,6 +23,9 @@
         <SolidColorBrush x:Key="SidebarBrush" Color="#FF0C1411" />
         <SolidColorBrush x:Key="SurfaceHoverBrush" Color="#FF1E2F26" />
         <SolidColorBrush x:Key="ErrorBrush" Color="#FFF87171" />
+        <SolidColorBrush x:Key="WarningBrush" Color="#FFFBBF24" />
+        <SolidColorBrush x:Key="WarningSoftBrush" Color="#FF3A2E0C" />
+        <SolidColorBrush x:Key="ErrorSoftBrush" Color="#FF3B1414" />
 
         <DropShadowEffect x:Key="MenuShadow"
                           Color="#FF000000"
@@ -661,6 +664,81 @@
                             Value="{DynamicResource TextOnAccentBrush}" />
                 </Trigger>
             </Style.Triggers>
+        </Style>
+
+        <!-- Compact button for queue rows and toolbars. -->
+        <Style x:Key="RowButtonStyle"
+               TargetType="Button"
+               BasedOn="{StaticResource SecondaryButtonStyle}">
+            <Setter Property="Padding"
+                    Value="12,5" />
+            <Setter Property="MinHeight"
+                    Value="32" />
+            <Setter Property="FontSize"
+                    Value="12" />
+        </Style>
+
+        <!-- Queue rows: themed card, accent outline when selected. -->
+        <Style x:Key="QueueRowStyle"
+               TargetType="ListBoxItem">
+            <Setter Property="HorizontalContentAlignment"
+                    Value="Stretch" />
+            <Setter Property="Margin"
+                    Value="0,0,0,9" />
+            <Setter Property="Padding"
+                    Value="0" />
+            <Setter Property="Focusable"
+                    Value="True" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Border x:Name="RowBorder"
+                                Padding="14"
+                                CornerRadius="9"
+                                Background="{DynamicResource SurfaceSecondaryBrush}"
+                                BorderBrush="{DynamicResource BorderBrush}"
+                                BorderThickness="1">
+                            <ContentPresenter />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver"
+                                     Value="True">
+                                <Setter TargetName="RowBorder"
+                                        Property="Background"
+                                        Value="{DynamicResource SurfaceHoverBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsSelected"
+                                     Value="True">
+                                <Setter TargetName="RowBorder"
+                                        Property="BorderBrush"
+                                        Value="{DynamicResource AccentBrush}" />
+                                <Setter TargetName="RowBorder"
+                                        Property="BorderThickness"
+                                        Value="2" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="ContextMenu">
+            <Setter Property="Background"
+                    Value="{DynamicResource RaisedSurfaceBrush}" />
+            <Setter Property="Foreground"
+                    Value="{DynamicResource TextBrush}" />
+            <Setter Property="BorderBrush"
+                    Value="{DynamicResource BorderBrush}" />
+        </Style>
+
+        <Style TargetType="MenuItem">
+            <Setter Property="Foreground"
+                    Value="{DynamicResource TextBrush}" />
+        </Style>
+
+        <Style TargetType="CheckBox">
+            <Setter Property="Foreground"
+                    Value="{DynamicResource TextBrush}" />
         </Style>
     </Application.Resources>
 </Application>

@@ -27,6 +27,14 @@ Requires .NET 8 (self-contained in the portable zip).
     downloads, SHA-256 verified after each file.
   - Gofile shares — single files direct, folders expand to one queue row
     per file (subfolders kept).
+  - Bunkr albums expand to one row per file (names and sizes up front);
+    each file downloads through the built-in browser using Bunkr's own
+    page flow, one at a time, pop-ups blocked.
+  - Filester file links (/d/...) download through the built-in browser;
+    thumbnail links (/t/...) are refused with a clear message.
+  - **Download in browser** (right-click any row): for links that open a
+    page instead of the file, the built-in browser presses the page's own
+    same-site Download button (or you do) and the file is caught.
   - MediaFire shares, MEGA files and folders (client-side decryption),
     generic HTTP(S) with resume and 429/503 backoff.
   - yt-dlp video — format picker, playlists, subtitle sidecars,
@@ -34,18 +42,38 @@ Requires .NET 8 (self-contained in the portable zip).
 - **Honest errors** — CAPTCHA walls open an in-app browser to solve once;
   removed links say so plainly (no endless retry); quota/rate limits stay
   queued with backoff.
-- **Queue** — concurrent downloads, per-host politeness, pause/cancel,
-  persistence across restarts, duplicate detection against history.
-- **Extras** — quiet-hours speed caps, ZIP extraction prompt, light/dark
-  themes, HTTP/HTTPS proxy with credentials, self-updater.
+- **Queue** — concurrent downloads, multi-connection transfers for big
+  files, per-host politeness, per-item pause/resume/cancel, reorder and
+  "download next", search and filters, multi-select, link checking
+  (online/removed/needs attention), duplicate detection against history.
+- **Resume everywhere** — canceled, paused, quota-stopped, crashed, or
+  closed downloads keep their partial file and continue where they
+  stopped (validated with If-Range so a changed file is never spliced).
+- **Host limits** — quota and rate limits are waited out automatically
+  inside the batch (partial file kept), never dodged.
+- **Pixeldrain API key** — optional; with Pixeldrain Pro it lifts the
+  free daily limit. Stored DPAPI-encrypted, sent only to Pixeldrain
+  over HTTPS. Settings → Pixeldrain API key → Check key.
+- **Honest results** — a link that returns a web page (share/album
+  page, keyless MEGA link) fails with a clear message instead of
+  being saved as a "completed" download; id-named files get their
+  real extension (.png, .mp4, …).
+- **Safety** — Mark of the Web on everything downloaded or extracted,
+  warnings for programs and disguised files, filename-spoofing cleanup,
+  hardened archive extraction, verified self-updates.
+- **Extras** — quiet-hours speed caps, ZIP extraction (RAR/7z with
+  passwords via an installed 7-Zip), tray icon and finish notifications,
+  shut-down-when-done, light/dark themes, HTTP/HTTPS/SOCKS proxies,
+  self-updater.
 
 ## Settings worth knowing
 
 - **Update repository** (`owner/name`) enables the in-app updater.
 - **External tools** can be auto-managed or pointed at your own yt-dlp /
   FFmpeg binaries.
-- Proxy is HTTP/HTTPS only — SOCKS is not supported. DRM-protected video
-  and password-protected shares are not supported either.
+- Proxy: HTTP, HTTPS, SOCKS4a, or SOCKS5 (with optional login).
+  DRM-protected video and password-protected shares are not
+  supported. Password-protected RAR/7z archives are (via 7-Zip).
 
 ## Develop
 

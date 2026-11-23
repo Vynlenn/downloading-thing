@@ -19,7 +19,13 @@ public sealed class QueueItemBindingTests
 
         // Dependency properties whose default binding mode is TwoWay.
         // Bound to get-only record properties, they crash template load.
-        string[] twoWayTargets = ["Value=\"{Binding", "IsIndeterminate=\"{Binding"];
+        string[] twoWayTargets =
+        [
+            "Value=\"{Binding",
+            "IsIndeterminate=\"{Binding",
+            // Run.Text is TwoWay by default too (the safety warning).
+            "<Run Text=\"{Binding"
+        ];
 
         foreach (string target in twoWayTargets)
         {

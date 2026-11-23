@@ -14,6 +14,7 @@ public static class DefaultSettingsFactory
             AskBeforeArchiveExtraction = true,
             SkipExactDuplicates = true,
             MaximumConcurrentDownloads = 3,
+            ConnectionsPerDownload = 4,
             ExternalToolsAutoUpdate = true
         };
     }

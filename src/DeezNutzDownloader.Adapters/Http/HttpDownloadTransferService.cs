@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Net.Http.Headers;
+using System.Security.Cryptography;
 using System.Text;
 using DeezNutzDownloader.Core.Challenges;
 using DeezNutzDownloader.Core.Downloads;
@@ -13,6 +14,16 @@ public sealed class HttpDownloadTransferService
     private const int BufferSize = 81_920;
     private const int MaximumFileNameLength = 180;
     private const int MaximumPreservedExtensionLength = 32;
+
+    // Progress is coalesced: one report per window instead of one
+    // per 80 KB chunk (1,000+ per second on a fast transfer), which
+    // kept the queue lock, record allocations and UI refreshes hot.
+    private const long ProgressReportIntervalMilliseconds = 100;
+
+    private const long StateSaveIntervalMilliseconds = 2_000;
+
+    private static readonly TimeSpan DefaultStallTimeout =
+        TimeSpan.FromSeconds(60);
 
     private static readonly HashSet<string> ReservedWindowsNames =
         new(StringComparer.OrdinalIgnoreCase)
@@ -44,12 +55,52 @@ public sealed class HttpDownloadTransferService
     private readonly HttpClient _httpClient;
     private readonly IReadOnlyList<IHostFileResolver> _resolvers;
     private readonly IMegaDownloader? _megaDownloader;
+    private readonly TimeSpan _stallTimeout;
+    private IBrowserDownloader? _browserDownloader;
+
+    /// <summary>
+    /// Downloads for hosts whose files only come through their own
+    /// page flow (Bunkr) go through this embedded-browser downloader.
+    /// </summary>
+    public HttpDownloadTransferService WithBrowserDownloader(
+        IBrowserDownloader browserDownloader)
+    {
+        _browserDownloader = browserDownloader;
+        return this;
+    }
 
     public HttpDownloadTransferService(
         HttpClient httpClient,
         IEnumerable<IHostFileResolver>? resolvers = null,
         IMegaDownloader? megaDownloader = null)
+        : this(
+            httpClient,
+            resolvers,
+            megaDownloader,
+            DefaultStallTimeout)
     {
+    }
+
+    /// <param name="stallTimeout">
+    /// How long a body read may receive nothing before the
+    /// connection counts as dead and the transfer resumes on a new
+    /// one. HttpClient.Timeout is infinite for large files, so
+    /// without this a silently dropped connection hangs forever.
+    /// </param>
+    internal HttpDownloadTransferService(
+        HttpClient httpClient,
+        IEnumerable<IHostFileResolver>? resolvers,
+        IMegaDownloader? megaDownloader,
+        TimeSpan stallTimeout)
+    {
+        if (stallTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(stallTimeout));
+        }
+
+        _stallTimeout = stallTimeout;
+
         _httpClient =
             httpClient ??
             throw new ArgumentNullException(nameof(httpClient));
@@ -68,6 +119,46 @@ public sealed class HttpDownloadTransferService
         ArgumentNullException.ThrowIfNull(request);
 
         Uri source = ValidateSource(request.Source);
+        Uri originalSource = source;
+
+        if (MegaLinks.IsMissingKey(source))
+        {
+            throw new NotAFileException(
+                source.Host,
+                MegaMissingKeyMessage);
+        }
+
+        if (BunkrLinks.IsAlbum(source))
+        {
+            throw new NotAFileException(
+                source.Host,
+                "This is a Bunkr album. Start the batch with Start all and it " +
+                "expands into one row per file first.");
+        }
+
+        if (FilesterLinks.IsThumbnail(source))
+        {
+            throw new NotAFileException(
+                source.Host,
+                "This is a Filester thumbnail preview (/t/...), not the file. " +
+                "Use the file's share link instead (filester.me/d/...).");
+        }
+
+        if (BunkrLinks.IsFilePage(source))
+        {
+            return await DownloadViaBrowserAsync(
+                    request, source, BrowserDownloadMode.Bunkr, progress, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        // Filester file pages, and anything the user chose to fetch
+        // in the browser ("Download in browser").
+        if (request.ViaBrowser || FilesterLinks.IsFilePage(source))
+        {
+            return await DownloadViaBrowserAsync(
+                    request, source, BrowserDownloadMode.Generic, progress, cancellationToken)
+                .ConfigureAwait(false);
+        }
         string? suggestedFileName = null;
         long? advertisedTotalBytes = null;
         string? expectedSha256 = null;
@@ -107,28 +198,75 @@ public sealed class HttpDownloadTransferService
         Directory.CreateDirectory(destinationDirectory);
         cancellationToken.ThrowIfCancellationRequested();
 
-        (
-            string temporaryPath,
-            FileStream temporaryStream
-        ) = CreateTemporaryFile(destinationDirectory);
+        bool isMega =
+            _megaDownloader is not null &&
+            MegaLinks.IsLink(source);
 
-        // The creation stream only reserves a unique name.
-        temporaryStream.Dispose();
+        // Queue downloads carry a resume key: their partial file has
+        // a stable name and survives cancel, pause, quota stops,
+        // crashes and restarts. MEGA decrypts client-side and always
+        // starts fresh.
+        string? resumeKey =
+            !isMega && PartialDownloadFiles.IsValidKey(request.ResumeKey)
+                ? request.ResumeKey
+                : null;
+
+        string temporaryPath;
+        PartialDownloadState? resumeState = null;
+
+        if (resumeKey is not null)
+        {
+            temporaryPath =
+                PartialDownloadFiles.PartPath(destinationDirectory, resumeKey);
+
+            resumeState =
+                PartialDownloadFiles.TryLoad(destinationDirectory, resumeKey);
+
+            // Same queue item, different link: never mix the bytes.
+            if (
+                resumeState is not null &&
+                !string.Equals(
+                    resumeState.SourceUrl,
+                    originalSource.AbsoluteUri,
+                    StringComparison.Ordinal))
+            {
+                resumeState = null;
+            }
+
+            if (resumeState is null)
+            {
+                StartFreshPartial(destinationDirectory, resumeKey, temporaryPath);
+            }
+        }
+        else
+        {
+            (
+                temporaryPath,
+                FileStream temporaryStream
+            ) = CreateTemporaryFile(destinationDirectory);
+
+            // The creation stream only reserves a unique name.
+            temporaryStream.Dispose();
+        }
 
         // The temp file is kept across throttle retries so a
-        // 429/503 wait can resume instead of restarting. It is
-        // deleted only on terminal failure (see catch below).
-        // A `continue` never triggers that cleanup.
+        // 429/503 wait can resume instead of restarting. Without a
+        // resume key it is deleted on terminal failure (see catch
+        // below); with one it is kept for the next attempt.
         string? pendingTemporaryPath = temporaryPath;
         long bytesWritten = 0;
         long? totalBytes = advertisedTotalBytes;
         string? fileName = null;
+        RangeConditionHeaderValue? resumeValidator = null;
+        string? responseMediaType = null;
+
+        // Set while the segmented engine owns the resume state, so
+        // the single-stream save below never overwrites its map.
+        bool segmentsOwnState = false;
 
         // MEGA links carry encrypted bytes: decrypt straight into
         // the temp file instead of the generic HTTP path.
-        if (
-            _megaDownloader is not null &&
-            MegaLinks.IsLink(source))
+        if (isMega)
         {
             return await DownloadViaMegaAsync(
                     source,
@@ -139,11 +277,103 @@ public sealed class HttpDownloadTransferService
                 .ConfigureAwait(false);
         }
 
+        // When the host advertises a SHA-256, hash while writing
+        // instead of re-reading the whole file afterwards. The
+        // state always covers exactly bytesWritten bytes, so a
+        // resumed transfer keeps hashing where it left off.
+        IncrementalHash? hasher =
+            string.IsNullOrWhiteSpace(expectedSha256)
+                ? null
+                : IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+
         try
         {
+            if (resumeState is not null && resumeKey is not null)
+            {
+                resumeValidator = ToValidator(resumeState);
+                fileName = resumeState.FileName;
+                totalBytes = resumeState.TotalBytes ?? totalBytes;
+
+                if (
+                    resumeState.Segments is { Count: > 0 } savedSegments &&
+                    resumeState.TotalBytes is long savedTotal)
+                {
+                    segmentsOwnState = true;
+
+                    bool finished;
+
+                    try
+                    {
+                        finished = await RunSegmentsAsync(
+                                source,
+                                temporaryPath,
+                                destinationDirectory,
+                                resumeKey,
+                                resumeState,
+                                savedTotal,
+                                Math.Max(1, request.Connections),
+                                resumeValidator,
+                                savedSegments,
+                                progress,
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+                    catch (Exception exception)
+                        when (
+                            exception is HttpRequestException or
+                                IOException &&
+                            !cancellationToken.IsCancellationRequested)
+                    {
+                        // The saved map stays on disk for the next
+                        // try; this attempt continues as one stream.
+                        finished = false;
+                    }
+
+                    segmentsOwnState = false;
+
+                    if (finished && fileName is not null)
+                    {
+                        return CompleteResumable(
+                            temporaryPath,
+                            destinationDirectory,
+                            resumeKey,
+                            fileName,
+                            source,
+                            originalSource,
+                            savedTotal,
+                            expectedSha256,
+                            ref pendingTemporaryPath);
+                    }
+
+                    // Changed file or no range support any more:
+                    // start over cleanly.
+                    StartFreshPartial(destinationDirectory, resumeKey, temporaryPath);
+                    resumeValidator = null;
+                    fileName = null;
+                    totalBytes = advertisedTotalBytes;
+                }
+                else
+                {
+                    long onDisk = new FileInfo(temporaryPath).Length;
+                    bytesWritten = Math.Clamp(resumeState.ContiguousBytes, 0, onDisk);
+
+                    if (bytesWritten > 0 && hasher is not null)
+                    {
+                        await HashPrefixAsync(
+                                hasher,
+                                temporaryPath,
+                                bytesWritten,
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+                }
+            }
+
             for (int attempt = 1; ; attempt++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+
+                long attemptStartBytes = bytesWritten;
 
                 using var httpRequest =
                     new HttpRequestMessage(HttpMethod.Get, source);
@@ -152,6 +382,13 @@ public sealed class HttpDownloadTransferService
                 {
                     httpRequest.Headers.Range =
                         new RangeHeaderValue(bytesWritten, null);
+
+                    // A changed file answers 200 with the new body
+                    // instead of splicing old and new bytes.
+                    if (resumeValidator is not null)
+                    {
+                        httpRequest.Headers.IfRange = resumeValidator;
+                    }
                 }
 
                 using HttpResponseMessage response =
@@ -244,6 +481,7 @@ public sealed class HttpDownloadTransferService
                     bytesWritten = 0;
                     totalBytes = null;
                     TruncateFile(temporaryPath);
+                    ResetHash(ref hasher);
 
                     if (attempt >= 4)
                     {
@@ -264,7 +502,38 @@ public sealed class HttpDownloadTransferService
                     response.StatusCode ==
                         System.Net.HttpStatusCode.PartialContent;
 
-                if (isPartial && bytesWritten > 0)
+                responseMediaType = content.Headers.ContentType?.MediaType;
+
+                // A share/album/login page instead of the file: saving
+                // it as a finished download hid the problem.
+                if (
+                    !isPartial &&
+                    FileTypeSniffer.IsWebPage(
+                        responseMediaType,
+                        GetContentDispositionFileName(content.Headers) is not null,
+                        response.RequestMessage?.RequestUri ?? source))
+                {
+                    throw new NotAFileException(
+                        source.Host,
+                        $"{originalSource.Host} sent a web page, not a file. " +
+                        "This is probably a share or album page: right-click it " +
+                        "and choose Download in browser, or use Crawl page in the " +
+                        "Link Grabber to collect its files.");
+                }
+
+                ContentRangeHeaderValue? answeredRange =
+                    content.Headers.ContentRange;
+
+                bool rangeMatches =
+                    isPartial &&
+                    bytesWritten > 0 &&
+                    (answeredRange?.From is null ||
+                        answeredRange.From == bytesWritten) &&
+                    (totalBytes is null ||
+                        answeredRange?.Length is null ||
+                        answeredRange.Length == totalBytes);
+
+                if (rangeMatches)
                 {
                     totalBytes ??=
                         DeriveTotalBytes(
@@ -273,15 +542,30 @@ public sealed class HttpDownloadTransferService
                 }
                 else
                 {
+                    if (isPartial && bytesWritten > 0)
+                    {
+                        // A 206 for a different offset or file size:
+                        // drop it and ask for the whole file again.
+                        bytesWritten = 0;
+                        totalBytes = advertisedTotalBytes;
+                        TruncateFile(temporaryPath);
+                        ResetHash(ref hasher);
+                        resumeValidator = null;
+                        continue;
+                    }
+
                     if (bytesWritten > 0)
                     {
-                        // The server ignored our Range header.
-                        // Restart cleanly instead of splicing.
+                        // The server ignored our Range header (or
+                        // If-Range saw a changed file). Restart
+                        // cleanly instead of splicing.
                         bytesWritten = 0;
                         TruncateFile(temporaryPath);
+                        ResetHash(ref hasher);
                     }
 
                     totalBytes = content.Headers.ContentLength;
+                    resumeValidator = SegmentedDownloader.BuildValidator(response);
                 }
 
                 if (fileName is null)
@@ -298,6 +582,154 @@ public sealed class HttpDownloadTransferService
                             fileNameSource,
                             suggestedFileName,
                             preferSuggestedName);
+                }
+
+                if (resumeKey is not null && bytesWritten == 0)
+                {
+                    SaveStreamState(
+                        destinationDirectory,
+                        resumeKey,
+                        originalSource,
+                        totalBytes,
+                        resumeValidator,
+                        fileName,
+                        0);
+                }
+
+                // Large files on range-capable servers download over
+                // several connections at once. Free file hosts are
+                // excluded: they throttle per IP and extra
+                // connections burn quota or trigger bans.
+                if (
+                    attempt == 1 &&
+                    bytesWritten == 0 &&
+                    hasher is null &&
+                    request.Connections > 1 &&
+                    request.MaxBytesPerSecond is not > 0 &&
+                    totalBytes is long segmentTotal &&
+                    !HostThrottlePolicy.IsSingleLaneHost(source.Host) &&
+                    !HostThrottlePolicy.IsSingleLaneHost(originalSource.Host) &&
+                    SegmentedDownloader.SupportsRanges(response))
+                {
+                    int connections =
+                        SegmentedDownloader.PlanConnectionCount(
+                            segmentTotal,
+                            request.Connections);
+
+                    if (connections > 1)
+                    {
+                        // Ranges go to the post-redirect URL the
+                        // server actually answered from.
+                        Uri rangeSource =
+                            response.RequestMessage?.RequestUri is
+                                { IsAbsoluteUri: true } answered
+                                ? answered
+                                : source;
+
+                        RangeConditionHeaderValue? validator =
+                            SegmentedDownloader.BuildValidator(response);
+
+                        // Release the probe connection before
+                        // opening the range connections.
+                        response.Dispose();
+
+                        bool segmented;
+                        segmentsOwnState = resumeKey is not null;
+
+                        try
+                        {
+                            segmented = resumeKey is not null
+                                ? await RunSegmentsAsync(
+                                        rangeSource,
+                                        temporaryPath,
+                                        destinationDirectory,
+                                        resumeKey,
+                                        new PartialDownloadState(
+                                            PartialDownloadState.CurrentVersion,
+                                            originalSource.AbsoluteUri,
+                                            segmentTotal,
+                                            ETagOf(validator),
+                                            validator?.Date,
+                                            fileName,
+                                            0,
+                                            null),
+                                        segmentTotal,
+                                        connections,
+                                        validator,
+                                        null,
+                                        progress,
+                                        cancellationToken)
+                                    .ConfigureAwait(false)
+                                : await new SegmentedDownloader(
+                                        _httpClient,
+                                        _stallTimeout)
+                                    .DownloadAsync(
+                                        rangeSource,
+                                        temporaryPath,
+                                        segmentTotal,
+                                        connections,
+                                        validator,
+                                        progress,
+                                        cancellationToken)
+                                    .ConfigureAwait(false);
+                        }
+                        catch (Exception exception)
+                            when (
+                                exception is HttpRequestException or
+                                    IOException &&
+                                !cancellationToken.IsCancellationRequested)
+                        {
+                            // Anything odd: one clean single stream.
+                            segmented = false;
+                        }
+
+                        segmentsOwnState = false;
+
+                        if (segmented)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+
+                            if (resumeKey is not null)
+                            {
+                                return CompleteResumable(
+                                    temporaryPath,
+                                    destinationDirectory,
+                                    resumeKey,
+                                    fileName!,
+                                    source,
+                                    originalSource,
+                                    segmentTotal,
+                                    expectedSha256,
+                                    ref pendingTemporaryPath,
+                                    responseMediaType);
+                            }
+
+                            DownloadTransferResult segmentedResult =
+                                Complete(
+                                    temporaryPath,
+                                    destinationDirectory,
+                                    fileName!,
+                                    source,
+                                    originalSource,
+                                    segmentTotal,
+                                    segmentTotal,
+                                    responseMediaType);
+
+                            pendingTemporaryPath = null;
+                            return segmentedResult;
+                        }
+
+                        TruncateFile(temporaryPath);
+
+                        if (resumeKey is not null)
+                        {
+                            PartialDownloadFiles.DeleteState(
+                                destinationDirectory,
+                                resumeKey);
+                        }
+
+                        continue;
+                    }
                 }
 
                 byte[] buffer =
@@ -321,6 +753,15 @@ public sealed class HttpDownloadTransferService
                     DateTimeOffset windowStart =
                         DateTimeOffset.UtcNow;
 
+                    // MinValue: the first chunk always reports.
+                    long lastReportTicks = long.MinValue;
+                    long lastStateSaveTicks = Environment.TickCount64;
+
+                    using var stallCancellation =
+                        CancellationTokenSource
+                            .CreateLinkedTokenSource(
+                                cancellationToken);
+
                     await using (
                         var resumeStream = new FileStream(
                             temporaryPath,
@@ -331,19 +772,43 @@ public sealed class HttpDownloadTransferService
                             FileOptions.Asynchronous |
                                 FileOptions.SequentialScan))
                     {
+                        // Drop any tail a failed write left past
+                        // the last confirmed byte before resuming.
+                        resumeStream.SetLength(bytesWritten);
+
                         resumeStream.Seek(
                             bytesWritten,
                             SeekOrigin.Begin);
 
                         while (true)
                         {
-                            int bytesRead =
-                                await sourceStream.ReadAsync(
-                                        buffer.AsMemory(
-                                            0,
-                                            BufferSize),
-                                        cancellationToken)
-                                    .ConfigureAwait(false);
+                            int bytesRead;
+
+                            // Re-arm the inactivity timer per read.
+                            stallCancellation.CancelAfter(
+                                _stallTimeout);
+
+                            try
+                            {
+                                bytesRead =
+                                    await sourceStream.ReadAsync(
+                                            buffer.AsMemory(
+                                                0,
+                                                BufferSize),
+                                            stallCancellation.Token)
+                                        .ConfigureAwait(false);
+                            }
+                            catch (OperationCanceledException exception)
+                                when (
+                                    !cancellationToken
+                                        .IsCancellationRequested)
+                            {
+                                throw new IOException(
+                                    $"No data from {source.Host} for " +
+                                    $"{_stallTimeout.TotalSeconds:0} " +
+                                    "seconds; reconnecting.",
+                                    exception);
+                            }
 
                             if (bytesRead == 0)
                             {
@@ -357,16 +822,55 @@ public sealed class HttpDownloadTransferService
                                     cancellationToken)
                                 .ConfigureAwait(false);
 
+                            hasher?.AppendData(
+                                buffer,
+                                0,
+                                bytesRead);
+
                             checked
                             {
                                 bytesWritten += bytesRead;
                                 windowBytes += bytesRead;
                             }
 
-                            progress?.Report(
-                                new DownloadTransferProgress(
-                                    bytesWritten,
-                                    totalBytes));
+                            long nowTicks = Environment.TickCount64;
+
+                            if (
+                                lastReportTicks == long.MinValue ||
+                                nowTicks - lastReportTicks >=
+                                    ProgressReportIntervalMilliseconds)
+                            {
+                                lastReportTicks = nowTicks;
+
+                                progress?.Report(
+                                    new DownloadTransferProgress(
+                                        bytesWritten,
+                                        totalBytes));
+                            }
+
+                            // Every few seconds: push buffered bytes to
+                            // the OS, then record them, so a crash
+                            // resumes from (at most) a moment ago.
+                            if (
+                                resumeKey is not null &&
+                                nowTicks - lastStateSaveTicks >=
+                                    StateSaveIntervalMilliseconds)
+                            {
+                                lastStateSaveTicks = nowTicks;
+
+                                await resumeStream.FlushAsync(
+                                        cancellationToken)
+                                    .ConfigureAwait(false);
+
+                                SaveStreamState(
+                                    destinationDirectory,
+                                    resumeKey,
+                                    originalSource,
+                                    totalBytes,
+                                    resumeValidator,
+                                    fileName,
+                                    bytesWritten);
+                            }
 
                             if (request.MaxBytesPerSecond > 0)
                             {
@@ -401,13 +905,28 @@ public sealed class HttpDownloadTransferService
                                 cancellationToken)
                             .ConfigureAwait(false);
                     }
+
+                    progress?.Report(
+                        new DownloadTransferProgress(
+                            bytesWritten,
+                            totalBytes));
                 }
                 catch (Exception exception)
                     when (
                         exception is HttpRequestException or
                             IOException &&
-                        attempt < 4)
+                        (attempt < 4 ||
+                            bytesWritten > attemptStartBytes))
                 {
+                    // An attempt that moved data earns a fresh
+                    // retry budget: a long download over a flaky
+                    // link should resume as often as it keeps
+                    // making progress, not die on the 4th blip.
+                    if (bytesWritten > attemptStartBytes)
+                    {
+                        attempt = 0;
+                    }
+
                     // Keep the partial file; the next attempt
                     // resumes via the Range header above.
                     progress?.Report(
@@ -437,30 +956,78 @@ public sealed class HttpDownloadTransferService
 
                 cancellationToken.ThrowIfCancellationRequested();
 
-                VerifyChecksum(
-                    temporaryPath,
-                    expectedSha256,
-                    source);
+                if (hasher is not null)
+                {
+                    VerifyChecksumHex(
+                        Convert.ToHexString(
+                            hasher.GetHashAndReset()),
+                        temporaryPath,
+                        expectedSha256,
+                        source);
+                }
 
-                string destinationPath =
-                    MoveToAvailableDestination(
+                DownloadTransferResult result =
+                    Complete(
                         temporaryPath,
                         destinationDirectory,
-                        fileName!);
+                        fileName!,
+                        source,
+                        originalSource,
+                        bytesWritten,
+                        totalBytes,
+                        responseMediaType);
 
                 pendingTemporaryPath = null;
 
-                return new DownloadTransferResult(
-                    source,
-                    destinationPath,
-                    Path.GetFileName(destinationPath),
-                    bytesWritten,
-                    totalBytes);
+                if (resumeKey is not null)
+                {
+                    PartialDownloadFiles.DeleteState(
+                        destinationDirectory,
+                        resumeKey);
+                }
+
+                return result;
             }
         }
-        catch
+        catch (Exception exception)
         {
-            if (pendingTemporaryPath is not null)
+            if (resumeKey is not null && pendingTemporaryPath is not null)
+            {
+                if (exception is NotAFileException)
+                {
+                    // Nothing worth resuming: drop the partial entirely.
+                    PartialDownloadFiles.Delete(destinationDirectory, resumeKey);
+                }
+                else if (exception is ChecksumMismatchException)
+                {
+                    // The bytes are wrong: never resume from them.
+                    // The file itself stays for inspection.
+                    PartialDownloadFiles.DeleteState(
+                        destinationDirectory,
+                        resumeKey);
+                }
+                else if (!segmentsOwnState && fileName is not null)
+                {
+                    // Cancel, pause, quota, network: keep the partial
+                    // and record exactly how much of it is good.
+                    SaveStreamState(
+                        destinationDirectory,
+                        resumeKey,
+                        originalSource,
+                        totalBytes,
+                        resumeValidator,
+                        fileName,
+                        bytesWritten);
+                }
+
+                throw;
+            }
+
+            // A checksum mismatch promises the user the file was
+            // KEPT for inspection; every other failure cleans up.
+            if (
+                pendingTemporaryPath is not null &&
+                exception is not ChecksumMismatchException)
             {
                 TryDeleteTemporaryFile(
                     pendingTemporaryPath);
@@ -468,6 +1035,302 @@ public sealed class HttpDownloadTransferService
 
             throw;
         }
+        finally
+        {
+            hasher?.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Moves the finished temp file to a free name and marks it as
+    /// downloaded from the internet.
+    /// </summary>
+    private static DownloadTransferResult Complete(
+        string temporaryPath,
+        string destinationDirectory,
+        string fileName,
+        Uri source,
+        Uri originalSource,
+        long bytesWritten,
+        long? totalBytes,
+        string? mediaType = null)
+    {
+        // Servers that name files by id ("89d50f21") give no
+        // extension; the first bytes say what the file really is.
+        fileName = FileTypeSniffer.EnsureExtension(
+            fileName,
+            ReadHeader(temporaryPath),
+            mediaType);
+
+        string destinationPath =
+            MoveToAvailableDestination(
+                temporaryPath,
+                destinationDirectory,
+                fileName);
+
+        MarkOfTheWeb.TryApply(
+            destinationPath,
+            source,
+            originalSource);
+
+        return new DownloadTransferResult(
+            source,
+            destinationPath,
+            Path.GetFileName(destinationPath),
+            bytesWritten,
+            totalBytes);
+    }
+
+    private Task<bool> RunSegmentsAsync(
+        Uri rangeSource,
+        string temporaryPath,
+        string destinationDirectory,
+        string resumeKey,
+        PartialDownloadState baseState,
+        long totalBytes,
+        int connections,
+        RangeConditionHeaderValue? validator,
+        IReadOnlyList<PartialSegment>? resumeSegments,
+        IProgress<DownloadTransferProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        return new SegmentedDownloader(_httpClient, _stallTimeout)
+            .DownloadAsync(
+                rangeSource,
+                temporaryPath,
+                totalBytes,
+                Math.Clamp(connections, 1, SegmentedDownloader.MaximumConnections),
+                validator,
+                progress,
+                cancellationToken,
+                resumeSegments,
+                segments => PartialDownloadFiles.TrySave(
+                    destinationDirectory,
+                    resumeKey,
+                    baseState with
+                    {
+                        ContiguousBytes = 0,
+                        Segments = segments
+                    }));
+    }
+
+    private static DownloadTransferResult CompleteResumable(
+        string temporaryPath,
+        string destinationDirectory,
+        string resumeKey,
+        string fileName,
+        Uri source,
+        Uri originalSource,
+        long totalBytes,
+        string? expectedSha256,
+        ref string? pendingTemporaryPath,
+        string? mediaType = null)
+    {
+        // Segments land out of order, so a host hash (rare here)
+        // is checked against the finished file.
+        VerifyChecksum(temporaryPath, expectedSha256, source);
+
+        DownloadTransferResult result =
+            Complete(
+                temporaryPath,
+                destinationDirectory,
+                fileName,
+                source,
+                originalSource,
+                totalBytes,
+                totalBytes,
+                mediaType);
+
+        pendingTemporaryPath = null;
+        PartialDownloadFiles.DeleteState(destinationDirectory, resumeKey);
+        return result;
+    }
+
+    private static void StartFreshPartial(
+        string destinationDirectory,
+        string resumeKey,
+        string temporaryPath)
+    {
+        PartialDownloadFiles.DeleteState(destinationDirectory, resumeKey);
+
+        using var reset = new FileStream(
+            temporaryPath,
+            FileMode.Create,
+            FileAccess.Write,
+            FileShare.None);
+    }
+
+    private static void SaveStreamState(
+        string destinationDirectory,
+        string resumeKey,
+        Uri originalSource,
+        long? totalBytes,
+        RangeConditionHeaderValue? validator,
+        string? fileName,
+        long contiguousBytes)
+    {
+        PartialDownloadFiles.TrySave(
+            destinationDirectory,
+            resumeKey,
+            new PartialDownloadState(
+                PartialDownloadState.CurrentVersion,
+                originalSource.AbsoluteUri,
+                totalBytes,
+                ETagOf(validator),
+                validator?.Date,
+                fileName,
+                contiguousBytes,
+                null));
+    }
+
+    private static string? ETagOf(RangeConditionHeaderValue? validator)
+    {
+        return validator?.EntityTag?.ToString();
+    }
+
+    private static RangeConditionHeaderValue? ToValidator(
+        PartialDownloadState state)
+    {
+        if (
+            !string.IsNullOrEmpty(state.ETag) &&
+            EntityTagHeaderValue.TryParse(state.ETag, out EntityTagHeaderValue? tag) &&
+            !tag.IsWeak)
+        {
+            return new RangeConditionHeaderValue(tag);
+        }
+
+        return state.LastModified is DateTimeOffset lastModified
+            ? new RangeConditionHeaderValue(lastModified)
+            : null;
+    }
+
+    private static async Task HashPrefixAsync(
+        IncrementalHash hasher,
+        string path,
+        long length,
+        CancellationToken cancellationToken)
+    {
+        await using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            BufferSize,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+
+        byte[] buffer = ArrayPool<byte>.Shared.Rent(BufferSize);
+
+        try
+        {
+            long remaining = length;
+
+            while (remaining > 0)
+            {
+                int read = await stream.ReadAsync(
+                        buffer.AsMemory(0, (int)Math.Min(BufferSize, remaining)),
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (read == 0)
+                {
+                    break;
+                }
+
+                hasher.AppendData(buffer, 0, read);
+                remaining -= read;
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    internal const string MegaMissingKeyMessage =
+        "This MEGA link has no decryption key (the part after #), so " +
+        "nothing can be downloaded. Copy the full link from MEGA, " +
+        "including everything after the #, and add it again.";
+
+    private async Task<DownloadTransferResult> DownloadViaBrowserAsync(
+        DownloadTransferRequest request,
+        Uri page,
+        BrowserDownloadMode mode,
+        IProgress<DownloadTransferProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        if (_browserDownloader is null)
+        {
+            throw new NotAFileException(
+                page.Host,
+                $"Files from {page.Host} download through the built-in browser, " +
+                "which is not available here.");
+        }
+
+        string destinationDirectory =
+            ValidateDestinationDirectory(request.DestinationDirectory);
+
+        Directory.CreateDirectory(destinationDirectory);
+
+        BrowserDownloadResult downloaded =
+            await _browserDownloader
+                .DownloadAsync(page, destinationDirectory, mode, progress, cancellationToken)
+                .ConfigureAwait(false);
+
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            string fileName =
+                SanitizeFileName(downloaded.SuggestedFileName) ??
+                SanitizeFileName(page.Segments[^1].Trim('/')) ??
+                "download";
+
+            // Same finishing as every other download: real extension,
+            // no overwrite, Mark of the Web pointing at the page.
+            return Complete(
+                downloaded.TemporaryPath,
+                destinationDirectory,
+                fileName,
+                page,
+                page,
+                downloaded.BytesWritten,
+                downloaded.BytesWritten,
+                downloaded.MediaType);
+        }
+        catch
+        {
+            TryDeleteTemporaryFile(downloaded.TemporaryPath);
+            throw;
+        }
+    }
+
+    private static byte[] ReadHeader(string path)
+    {
+        try
+        {
+            using var stream = new FileStream(
+                path, FileMode.Open, FileAccess.Read, FileShare.Read);
+
+            byte[] header = new byte[FileTypeSniffer.HeaderBytesNeeded];
+            int read = stream.Read(header, 0, header.Length);
+            return header[..read];
+        }
+        catch (Exception exception)
+            when (exception is IOException or UnauthorizedAccessException)
+        {
+            return Array.Empty<byte>();
+        }
+    }
+
+    private static void ResetHash(ref IncrementalHash? hasher)
+    {
+        if (hasher is null)
+        {
+            return;
+        }
+
+        hasher.Dispose();
+        hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
     }
 
     /// <summary>
@@ -488,11 +1351,29 @@ public sealed class HttpDownloadTransferService
 
         string actual;
 
-        using (var sha = System.Security.Cryptography.SHA256.Create())
+        using (var sha = SHA256.Create())
         using (Stream stream = File.OpenRead(temporaryPath))
         {
             byte[] hash = sha.ComputeHash(stream);
             actual = Convert.ToHexString(hash);
+        }
+
+        VerifyChecksumHex(
+            actual,
+            temporaryPath,
+            expectedSha256,
+            source);
+    }
+
+    internal static void VerifyChecksumHex(
+        string actual,
+        string temporaryPath,
+        string? expectedSha256,
+        Uri source)
+    {
+        if (string.IsNullOrWhiteSpace(expectedSha256))
+        {
+            return;
         }
 
         if (
@@ -554,6 +1435,8 @@ public sealed class HttpDownloadTransferService
                 pendingTemporaryPath = null;
                 TryDeleteTemporaryFile(temporaryPath);
 
+                MarkOfTheWeb.TryApplyToDirectory(folderDir, source);
+
                 return new DownloadTransferResult(
                     source,
                     folderDir,
@@ -584,6 +1467,8 @@ public sealed class HttpDownloadTransferService
                     fileName);
 
             pendingTemporaryPath = null;
+
+            MarkOfTheWeb.TryApply(destinationPath, source);
 
             return new DownloadTransferResult(
                 source,
@@ -871,6 +1756,14 @@ public sealed class HttpDownloadTransferService
         return stem + suffix + extension;
     }
 
+    /// <summary>The name a response would be saved under (link checks).</summary>
+    internal static string SuggestFileName(
+        HttpContentHeaders headers,
+        Uri source)
+    {
+        return ResolveSafeFileName(headers, source);
+    }
+
     private static string ResolveSafeFileName(
         HttpContentHeaders headers,
         Uri source,
@@ -1030,7 +1923,7 @@ public sealed class HttpDownloadTransferService
         }
     }
 
-    private static string? SanitizeFileName(
+    internal static string? SanitizeFileName(
         string? candidate)
     {
         if (string.IsNullOrWhiteSpace(candidate))
@@ -1068,6 +1961,27 @@ public sealed class HttpDownloadTransferService
 
         foreach (char character in value)
         {
+            // Bidi overrides and zero-width characters let a server
+            // disguise "invoice<RLO>fdp.exe" as "invoiceexe.pdf".
+            // Drop them outright: they never belong in a filename.
+            if (IsSpoofingCharacter(character))
+            {
+                continue;
+            }
+
+            // Collapse whitespace runs (and exotic Unicode spaces)
+            // so "report.pdf<60 spaces>.exe" cannot push the real
+            // extension out of view in Explorer or the queue.
+            if (char.IsWhiteSpace(character))
+            {
+                if (builder.Length > 0 && builder[^1] != ' ')
+                {
+                    builder.Append(' ');
+                }
+
+                continue;
+            }
+
             builder.Append(
                 IsInvalidFileNameCharacter(character)
                     ? '_'
@@ -1097,6 +2011,17 @@ public sealed class HttpDownloadTransferService
         }
 
         return LimitFileName(fileName);
+    }
+
+    internal static bool IsSpoofingCharacter(char character)
+    {
+        return character is
+            '\u061C' or                        // Arabic letter mark
+            (>= '\u200B' and <= '\u200F') or  // zero-width, LRM/RLM
+            (>= '\u202A' and <= '\u202E') or  // bidi embeds/overrides
+            (>= '\u2060' and <= '\u2064') or  // word joiner, invisibles
+            (>= '\u2066' and <= '\u2069') or  // bidi isolates
+            '\uFEFF';                          // zero-width no-break
     }
 
     private static bool IsInvalidFileNameCharacter(
