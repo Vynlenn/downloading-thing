@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Net.Http.Headers;
+using System.Security.Cryptography;
 using System.Text;
 using DeezNutzDownloader.Core.Challenges;
 using DeezNutzDownloader.Core.Downloads;
@@ -13,6 +14,14 @@ public sealed class HttpDownloadTransferService
     private const int BufferSize = 81_920;
     private const int MaximumFileNameLength = 180;
     private const int MaximumPreservedExtensionLength = 32;
+
+    // Progress is coalesced: one report per window instead of one
+    // per 80 KB chunk (1,000+ per second on a fast transfer), which
+    // kept the queue lock, record allocations and UI refreshes hot.
+    private const long ProgressReportIntervalMilliseconds = 100;
+
+    private static readonly TimeSpan DefaultStallTimeout =
+        TimeSpan.FromSeconds(60);
 
     private static readonly HashSet<string> ReservedWindowsNames =
         new(StringComparer.OrdinalIgnoreCase)
@@ -44,12 +53,40 @@ public sealed class HttpDownloadTransferService
     private readonly HttpClient _httpClient;
     private readonly IReadOnlyList<IHostFileResolver> _resolvers;
     private readonly IMegaDownloader? _megaDownloader;
+    private readonly TimeSpan _stallTimeout;
 
     public HttpDownloadTransferService(
         HttpClient httpClient,
         IEnumerable<IHostFileResolver>? resolvers = null,
         IMegaDownloader? megaDownloader = null)
+        : this(
+            httpClient,
+            resolvers,
+            megaDownloader,
+            DefaultStallTimeout)
     {
+    }
+
+    /// <param name="stallTimeout">
+    /// How long a body read may receive nothing before the
+    /// connection counts as dead and the transfer resumes on a new
+    /// one. HttpClient.Timeout is infinite for large files, so
+    /// without this a silently dropped connection hangs forever.
+    /// </param>
+    internal HttpDownloadTransferService(
+        HttpClient httpClient,
+        IEnumerable<IHostFileResolver>? resolvers,
+        IMegaDownloader? megaDownloader,
+        TimeSpan stallTimeout)
+    {
+        if (stallTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(stallTimeout));
+        }
+
+        _stallTimeout = stallTimeout;
+
         _httpClient =
             httpClient ??
             throw new ArgumentNullException(nameof(httpClient));
@@ -68,6 +105,7 @@ public sealed class HttpDownloadTransferService
         ArgumentNullException.ThrowIfNull(request);
 
         Uri source = ValidateSource(request.Source);
+        Uri originalSource = source;
         string? suggestedFileName = null;
         long? advertisedTotalBytes = null;
         string? expectedSha256 = null;
@@ -139,11 +177,22 @@ public sealed class HttpDownloadTransferService
                 .ConfigureAwait(false);
         }
 
+        // When the host advertises a SHA-256, hash while writing
+        // instead of re-reading the whole file afterwards. The
+        // state always covers exactly bytesWritten bytes, so a
+        // resumed transfer keeps hashing where it left off.
+        IncrementalHash? hasher =
+            string.IsNullOrWhiteSpace(expectedSha256)
+                ? null
+                : IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+
         try
         {
             for (int attempt = 1; ; attempt++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+
+                long attemptStartBytes = bytesWritten;
 
                 using var httpRequest =
                     new HttpRequestMessage(HttpMethod.Get, source);
@@ -244,6 +293,7 @@ public sealed class HttpDownloadTransferService
                     bytesWritten = 0;
                     totalBytes = null;
                     TruncateFile(temporaryPath);
+                    ResetHash(ref hasher);
 
                     if (attempt >= 4)
                     {
@@ -279,6 +329,7 @@ public sealed class HttpDownloadTransferService
                         // Restart cleanly instead of splicing.
                         bytesWritten = 0;
                         TruncateFile(temporaryPath);
+                        ResetHash(ref hasher);
                     }
 
                     totalBytes = content.Headers.ContentLength;
@@ -321,6 +372,14 @@ public sealed class HttpDownloadTransferService
                     DateTimeOffset windowStart =
                         DateTimeOffset.UtcNow;
 
+                    // MinValue: the first chunk always reports.
+                    long lastReportTicks = long.MinValue;
+
+                    using var stallCancellation =
+                        CancellationTokenSource
+                            .CreateLinkedTokenSource(
+                                cancellationToken);
+
                     await using (
                         var resumeStream = new FileStream(
                             temporaryPath,
@@ -331,19 +390,43 @@ public sealed class HttpDownloadTransferService
                             FileOptions.Asynchronous |
                                 FileOptions.SequentialScan))
                     {
+                        // Drop any tail a failed write left past
+                        // the last confirmed byte before resuming.
+                        resumeStream.SetLength(bytesWritten);
+
                         resumeStream.Seek(
                             bytesWritten,
                             SeekOrigin.Begin);
 
                         while (true)
                         {
-                            int bytesRead =
-                                await sourceStream.ReadAsync(
-                                        buffer.AsMemory(
-                                            0,
-                                            BufferSize),
-                                        cancellationToken)
-                                    .ConfigureAwait(false);
+                            int bytesRead;
+
+                            // Re-arm the inactivity timer per read.
+                            stallCancellation.CancelAfter(
+                                _stallTimeout);
+
+                            try
+                            {
+                                bytesRead =
+                                    await sourceStream.ReadAsync(
+                                            buffer.AsMemory(
+                                                0,
+                                                BufferSize),
+                                            stallCancellation.Token)
+                                        .ConfigureAwait(false);
+                            }
+                            catch (OperationCanceledException exception)
+                                when (
+                                    !cancellationToken
+                                        .IsCancellationRequested)
+                            {
+                                throw new IOException(
+                                    $"No data from {source.Host} for " +
+                                    $"{_stallTimeout.TotalSeconds:0} " +
+                                    "seconds; reconnecting.",
+                                    exception);
+                            }
 
                             if (bytesRead == 0)
                             {
@@ -357,16 +440,31 @@ public sealed class HttpDownloadTransferService
                                     cancellationToken)
                                 .ConfigureAwait(false);
 
+                            hasher?.AppendData(
+                                buffer,
+                                0,
+                                bytesRead);
+
                             checked
                             {
                                 bytesWritten += bytesRead;
                                 windowBytes += bytesRead;
                             }
 
-                            progress?.Report(
-                                new DownloadTransferProgress(
-                                    bytesWritten,
-                                    totalBytes));
+                            long nowTicks = Environment.TickCount64;
+
+                            if (
+                                lastReportTicks == long.MinValue ||
+                                nowTicks - lastReportTicks >=
+                                    ProgressReportIntervalMilliseconds)
+                            {
+                                lastReportTicks = nowTicks;
+
+                                progress?.Report(
+                                    new DownloadTransferProgress(
+                                        bytesWritten,
+                                        totalBytes));
+                            }
 
                             if (request.MaxBytesPerSecond > 0)
                             {
@@ -401,13 +499,28 @@ public sealed class HttpDownloadTransferService
                                 cancellationToken)
                             .ConfigureAwait(false);
                     }
+
+                    progress?.Report(
+                        new DownloadTransferProgress(
+                            bytesWritten,
+                            totalBytes));
                 }
                 catch (Exception exception)
                     when (
                         exception is HttpRequestException or
                             IOException &&
-                        attempt < 4)
+                        (attempt < 4 ||
+                            bytesWritten > attemptStartBytes))
                 {
+                    // An attempt that moved data earns a fresh
+                    // retry budget: a long download over a flaky
+                    // link should resume as often as it keeps
+                    // making progress, not die on the 4th blip.
+                    if (bytesWritten > attemptStartBytes)
+                    {
+                        attempt = 0;
+                    }
+
                     // Keep the partial file; the next attempt
                     // resumes via the Range header above.
                     progress?.Report(
@@ -437,10 +550,15 @@ public sealed class HttpDownloadTransferService
 
                 cancellationToken.ThrowIfCancellationRequested();
 
-                VerifyChecksum(
-                    temporaryPath,
-                    expectedSha256,
-                    source);
+                if (hasher is not null)
+                {
+                    VerifyChecksumHex(
+                        Convert.ToHexString(
+                            hasher.GetHashAndReset()),
+                        temporaryPath,
+                        expectedSha256,
+                        source);
+                }
 
                 string destinationPath =
                     MoveToAvailableDestination(
@@ -450,6 +568,11 @@ public sealed class HttpDownloadTransferService
 
                 pendingTemporaryPath = null;
 
+                MarkOfTheWeb.TryApply(
+                    destinationPath,
+                    source,
+                    originalSource);
+
                 return new DownloadTransferResult(
                     source,
                     destinationPath,
@@ -458,9 +581,13 @@ public sealed class HttpDownloadTransferService
                     totalBytes);
             }
         }
-        catch
+        catch (Exception exception)
         {
-            if (pendingTemporaryPath is not null)
+            // A checksum mismatch promises the user the file was
+            // KEPT for inspection; every other failure cleans up.
+            if (
+                pendingTemporaryPath is not null &&
+                exception is not ChecksumMismatchException)
             {
                 TryDeleteTemporaryFile(
                     pendingTemporaryPath);
@@ -468,6 +595,21 @@ public sealed class HttpDownloadTransferService
 
             throw;
         }
+        finally
+        {
+            hasher?.Dispose();
+        }
+    }
+
+    private static void ResetHash(ref IncrementalHash? hasher)
+    {
+        if (hasher is null)
+        {
+            return;
+        }
+
+        hasher.Dispose();
+        hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
     }
 
     /// <summary>
@@ -488,11 +630,29 @@ public sealed class HttpDownloadTransferService
 
         string actual;
 
-        using (var sha = System.Security.Cryptography.SHA256.Create())
+        using (var sha = SHA256.Create())
         using (Stream stream = File.OpenRead(temporaryPath))
         {
             byte[] hash = sha.ComputeHash(stream);
             actual = Convert.ToHexString(hash);
+        }
+
+        VerifyChecksumHex(
+            actual,
+            temporaryPath,
+            expectedSha256,
+            source);
+    }
+
+    internal static void VerifyChecksumHex(
+        string actual,
+        string temporaryPath,
+        string? expectedSha256,
+        Uri source)
+    {
+        if (string.IsNullOrWhiteSpace(expectedSha256))
+        {
+            return;
         }
 
         if (
@@ -554,6 +714,8 @@ public sealed class HttpDownloadTransferService
                 pendingTemporaryPath = null;
                 TryDeleteTemporaryFile(temporaryPath);
 
+                MarkOfTheWeb.TryApplyToDirectory(folderDir, source);
+
                 return new DownloadTransferResult(
                     source,
                     folderDir,
@@ -584,6 +746,8 @@ public sealed class HttpDownloadTransferService
                     fileName);
 
             pendingTemporaryPath = null;
+
+            MarkOfTheWeb.TryApply(destinationPath, source);
 
             return new DownloadTransferResult(
                 source,
@@ -1030,7 +1194,7 @@ public sealed class HttpDownloadTransferService
         }
     }
 
-    private static string? SanitizeFileName(
+    internal static string? SanitizeFileName(
         string? candidate)
     {
         if (string.IsNullOrWhiteSpace(candidate))
@@ -1068,6 +1232,27 @@ public sealed class HttpDownloadTransferService
 
         foreach (char character in value)
         {
+            // Bidi overrides and zero-width characters let a server
+            // disguise "invoice<RLO>fdp.exe" as "invoiceexe.pdf".
+            // Drop them outright: they never belong in a filename.
+            if (IsSpoofingCharacter(character))
+            {
+                continue;
+            }
+
+            // Collapse whitespace runs (and exotic Unicode spaces)
+            // so "report.pdf<60 spaces>.exe" cannot push the real
+            // extension out of view in Explorer or the queue.
+            if (char.IsWhiteSpace(character))
+            {
+                if (builder.Length > 0 && builder[^1] != ' ')
+                {
+                    builder.Append(' ');
+                }
+
+                continue;
+            }
+
             builder.Append(
                 IsInvalidFileNameCharacter(character)
                     ? '_'
@@ -1097,6 +1282,17 @@ public sealed class HttpDownloadTransferService
         }
 
         return LimitFileName(fileName);
+    }
+
+    internal static bool IsSpoofingCharacter(char character)
+    {
+        return character is
+            '\u061C' or                        // Arabic letter mark
+            (>= '\u200B' and <= '\u200F') or  // zero-width, LRM/RLM
+            (>= '\u202A' and <= '\u202E') or  // bidi embeds/overrides
+            (>= '\u2060' and <= '\u2064') or  // word joiner, invisibles
+            (>= '\u2066' and <= '\u2069') or  // bidi isolates
+            '\uFEFF';                          // zero-width no-break
     }
 
     private static bool IsInvalidFileNameCharacter(

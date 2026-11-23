@@ -119,7 +119,7 @@ public sealed class DownloadOrchestrator : IDisposable
                     NotStartedCount: 0);
             }
 
-            var state = new BatchWorkState();
+            var state = new BatchWorkState(selectedItems);
 
             int workerCount = Math.Min(
                 maximumConcurrency,
@@ -240,110 +240,181 @@ public sealed class DownloadOrchestrator : IDisposable
     {
         while (!cancellationToken.IsCancellationRequested)
         {
-            int itemIndex = Interlocked.Increment(
-                ref state.NextItemIndex);
+            // Take the first pending item whose host has a free
+            // lane. A worker never parks behind a busy single-lane
+            // host (Pixeldrain, Gofile, MEGA, ...) while items for
+            // other hosts are still waiting further down the list.
+            (
+                DownloadQueueItem? item,
+                SemaphoreSlim? hostGate,
+                Task? laneFreed
+            ) = TryTakeNextItem(state);
 
-            if (itemIndex >= selectedItems.Count)
+            if (item is null)
             {
-                return;
-            }
+                if (laneFreed is null)
+                {
+                    return;
+                }
 
-            if (cancellationToken.IsCancellationRequested)
-            {
-                return;
-            }
-
-            DownloadQueueItem item =
-                selectedItems[itemIndex];
-
-            // Free file hosts (Pixeldrain, Gofile, MEGA, …)
-            // throttle per IP: one active transfer per host.
-            SemaphoreSlim? hostGate = GetHostGate(item.Url);
-
-            if (hostGate is not null)
-            {
                 try
                 {
-                    await hostGate.WaitAsync(cancellationToken)
+                    await laneFreed
+                        .WaitAsync(cancellationToken)
                         .ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {
                     return;
                 }
-            }
 
-            if (!_queue.TryMarkDownloading(item.Id))
-            {
-                hostGate?.Release();
                 continue;
             }
 
-            Interlocked.Increment(
-                ref state.StartedCount);
-
-            string itemDirectory =
-                ResolveItemDirectory(
-                    destinationDirectory,
-                    item.RelativeFolder);
-
             try
             {
-                var request = new DownloadTransferRequest(
-                    new Uri(item.Url, UriKind.Absolute),
-                    itemDirectory,
-                    maxBytesPerSecond);
-
-                var progress =
-                    new InlineProgress<
-                        DownloadTransferProgress>(
-                        update =>
-                            _queue.TryReportProgress(
-                                item.Id,
-                                update));
-
-                DownloadTransferResult result =
-                    await _transferService.DownloadAsync(
-                            request,
-                            progress,
-                            cancellationToken)
-                        .ConfigureAwait(false);
-
-                cancellationToken.ThrowIfCancellationRequested();
-
-                _queue.TryMarkCompleted(
-                    item.Id,
-                    result);
-
-                Interlocked.Increment(
-                    ref state.CompletedCount);
-            }
-            catch (OperationCanceledException)
-                when (cancellationToken.IsCancellationRequested)
-            {
-                _queue.TryMarkCanceled(item.Id);
-
-                Interlocked.Increment(
-                    ref state.CanceledCount);
-            }
-            catch (Exception exception)
-            {
-                _queue.TryMarkFailed(
-                    item.Id,
-                    GetFailureMessage(exception));
-
-                Interlocked.Increment(
-                    ref state.FailedCount);
-
-                if (
-                    exception is
-                        ChallengeDetectedException challenge)
+                if (!_queue.TryMarkDownloading(item.Id))
                 {
-                    RaiseChallengeBlocked(challenge);
+                    continue;
                 }
+
+                Interlocked.Increment(
+                    ref state.StartedCount);
+
+                await RunItemAsync(
+                        item,
+                        destinationDirectory,
+                        state,
+                        cancellationToken,
+                        maxBytesPerSecond)
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                hostGate?.Release();
+                SignalLaneFreed(state);
+            }
+        }
+    }
+
+    private (
+        DownloadQueueItem? Item,
+        SemaphoreSlim? HostGate,
+        Task? LaneFreed
+    ) TryTakeNextItem(BatchWorkState state)
+    {
+        lock (state.Sync)
+        {
+            LinkedListNode<DownloadQueueItem>? node =
+                state.Pending.First;
+
+            while (node is not null)
+            {
+                SemaphoreSlim? hostGate =
+                    GetHostGate(node.Value.Url);
+
+                // Wait(0) never blocks: it either takes the
+                // host's lane now or reports it busy.
+                if (hostGate is null || hostGate.Wait(0))
+                {
+                    state.Pending.Remove(node);
+                    return (node.Value, hostGate, null);
+                }
+
+                node = node.Next;
             }
 
-            hostGate?.Release();
+            return state.Pending.Count == 0
+                ? (null, null, null)
+                : (null, null, state.LaneFreed.Task);
+        }
+    }
+
+    private static void SignalLaneFreed(BatchWorkState state)
+    {
+        TaskCompletionSource freed;
+
+        lock (state.Sync)
+        {
+            freed = state.LaneFreed;
+            state.LaneFreed = NewLaneSignal();
+        }
+
+        freed.TrySetResult();
+    }
+
+    private static TaskCompletionSource NewLaneSignal()
+    {
+        return new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    private async Task RunItemAsync(
+        DownloadQueueItem item,
+        string destinationDirectory,
+        BatchWorkState state,
+        CancellationToken cancellationToken,
+        long? maxBytesPerSecond)
+    {
+        string itemDirectory =
+            ResolveItemDirectory(
+                destinationDirectory,
+                item.RelativeFolder);
+
+        try
+        {
+            var request = new DownloadTransferRequest(
+                new Uri(item.Url, UriKind.Absolute),
+                itemDirectory,
+                maxBytesPerSecond);
+
+            var progress =
+                new InlineProgress<
+                    DownloadTransferProgress>(
+                    update =>
+                        _queue.TryReportProgress(
+                            item.Id,
+                            update));
+
+            DownloadTransferResult result =
+                await _transferService.DownloadAsync(
+                        request,
+                        progress,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            _queue.TryMarkCompleted(
+                item.Id,
+                result);
+
+            Interlocked.Increment(
+                ref state.CompletedCount);
+        }
+        catch (OperationCanceledException)
+            when (cancellationToken.IsCancellationRequested)
+        {
+            _queue.TryMarkCanceled(item.Id);
+
+            Interlocked.Increment(
+                ref state.CanceledCount);
+        }
+        catch (Exception exception)
+        {
+            _queue.TryMarkFailed(
+                item.Id,
+                GetFailureMessage(exception));
+
+            Interlocked.Increment(
+                ref state.FailedCount);
+
+            if (
+                exception is
+                    ChallengeDetectedException challenge)
+            {
+                RaiseChallengeBlocked(challenge);
+            }
         }
     }
 
@@ -510,7 +581,21 @@ public sealed class DownloadOrchestrator : IDisposable
 
     private sealed class BatchWorkState
     {
-        public int NextItemIndex = -1;
+        public BatchWorkState(
+            IEnumerable<DownloadQueueItem> items)
+        {
+            Pending = new LinkedList<DownloadQueueItem>(items);
+        }
+
+        public readonly object Sync = new();
+
+        // Guarded by Sync.
+        public readonly LinkedList<DownloadQueueItem> Pending;
+
+        // Completed (and replaced) whenever a worker finishes an
+        // item, waking workers that found every pending host busy.
+        public TaskCompletionSource LaneFreed = NewLaneSignal();
+
         public int StartedCount;
         public int CompletedCount;
         public int FailedCount;

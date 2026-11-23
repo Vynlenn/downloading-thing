@@ -3,6 +3,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Net.Http;
 using System.Reflection;
+using System.Security.Cryptography;
 using DeezNutzDownloader.Core.Updates;
 
 namespace DeezNutzDownloader.App.Updates;
@@ -128,7 +129,7 @@ public sealed class AppUpdater
             $"Downloading update {update.Version}…");
 
         await DownloadFileAsync(
-                update.Asset.DownloadUrl,
+                update.Asset,
                 zipPath,
                 cancellationToken)
             .ConfigureAwait(false);
@@ -171,33 +172,99 @@ public sealed class AppUpdater
     }
 
     private async Task DownloadFileAsync(
-        string url,
+        ReleaseAsset asset,
         string destinationPath,
         CancellationToken cancellationToken)
     {
+        if (!UpdateCheck.IsTrustedAssetUrl(asset.DownloadUrl))
+        {
+            throw new InvalidOperationException(
+                "The update download is not an HTTPS GitHub URL; " +
+                "it was refused.");
+        }
+
         using HttpResponseMessage response =
             await _httpClient.GetAsync(
-                    url,
+                    asset.DownloadUrl,
                     HttpCompletionOption.ResponseHeadersRead,
                     cancellationToken)
                 .ConfigureAwait(false);
 
         response.EnsureSuccessStatusCode();
 
-        await using Stream source =
-            await response.Content.ReadAsStreamAsync(cancellationToken)
-                .ConfigureAwait(false);
+        // Redirects (github.com -> *.githubusercontent.com) must
+        // land on a trusted HTTPS host too.
+        if (
+            response.RequestMessage?.RequestUri is not Uri finalUri ||
+            !UpdateCheck.IsTrustedAssetUri(finalUri))
+        {
+            throw new InvalidOperationException(
+                "The update download was redirected off GitHub; " +
+                "it was refused.");
+        }
 
-        await using var destination = new FileStream(
-            destinationPath,
-            FileMode.Create,
-            FileAccess.Write,
-            FileShare.None,
-            81_920,
-            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        using var sha256 = IncrementalHash.CreateHash(
+            HashAlgorithmName.SHA256);
 
-        await source.CopyToAsync(destination, cancellationToken)
-            .ConfigureAwait(false);
+        long received = 0;
+
+        await using (
+            Stream source =
+                await response.Content.ReadAsStreamAsync(cancellationToken)
+                    .ConfigureAwait(false))
+        await using (
+            var destination = new FileStream(
+                destinationPath,
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.None,
+                81_920,
+                FileOptions.Asynchronous | FileOptions.SequentialScan))
+        {
+            byte[] buffer = new byte[81_920];
+
+            while (true)
+            {
+                int read = await source.ReadAsync(buffer, cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (read == 0)
+                {
+                    break;
+                }
+
+                await destination.WriteAsync(
+                        buffer.AsMemory(0, read),
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+                sha256.AppendData(buffer, 0, read);
+                received += read;
+            }
+        }
+
+        if (asset.SizeBytes > 0 && received != asset.SizeBytes)
+        {
+            TryDelete(destinationPath);
+
+            throw new InvalidOperationException(
+                $"The update download was {received:N0} bytes but " +
+                $"GitHub lists {asset.SizeBytes:N0}; it was discarded.");
+        }
+
+        if (asset.Sha256 is not null)
+        {
+            string actual = Convert.ToHexString(sha256.GetHashAndReset());
+
+            if (!actual.Equals(asset.Sha256, StringComparison.OrdinalIgnoreCase))
+            {
+                TryDelete(destinationPath);
+
+                throw new InvalidOperationException(
+                    "The update failed its SHA-256 check against the " +
+                    "digest GitHub published; it was discarded.");
+            }
+        }
     }
 
     private static string UnwrapSingleFolder(string pendingDir)

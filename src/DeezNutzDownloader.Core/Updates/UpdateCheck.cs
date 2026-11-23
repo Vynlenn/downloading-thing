@@ -5,7 +5,8 @@ namespace DeezNutzDownloader.Core.Updates;
 public sealed record ReleaseAsset(
     string Name,
     string DownloadUrl,
-    long SizeBytes);
+    long SizeBytes,
+    string? Sha256 = null);
 
 public sealed record GitHubReleaseInfo(
     string TagName,
@@ -44,6 +45,69 @@ public static class UpdateCheck
                 part.All(character =>
                     char.IsLetterOrDigit(character) ||
                     character is '-' or '_' or '.'));
+    }
+
+    /// <summary>
+    /// HTTPS on github.com or a *.githubusercontent.com download
+    /// host. Anything else (plain HTTP, look-alike domains) is
+    /// refused before a byte is fetched.
+    /// </summary>
+    public static bool IsTrustedAssetUrl(string? url)
+    {
+        if (
+            string.IsNullOrWhiteSpace(url) ||
+            !Uri.TryCreate(url, UriKind.Absolute, out Uri? uri))
+        {
+            return false;
+        }
+
+        return IsTrustedAssetUri(uri);
+    }
+
+    public static bool IsTrustedAssetUri(Uri uri)
+    {
+        ArgumentNullException.ThrowIfNull(uri);
+
+        if (
+            !uri.IsAbsoluteUri ||
+            uri.Scheme != Uri.UriSchemeHttps ||
+            !string.IsNullOrEmpty(uri.UserInfo))
+        {
+            return false;
+        }
+
+        string host = uri.IdnHost.TrimEnd('.');
+
+        return
+            host.Equals("github.com", StringComparison.OrdinalIgnoreCase) ||
+            host.EndsWith(
+                ".githubusercontent.com",
+                StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// GitHub publishes "digest": "sha256:&lt;hex&gt;" per release
+    /// asset. Returns the uppercase hex, or null when absent or not
+    /// a well-formed SHA-256.
+    /// </summary>
+    public static string? ParseSha256Digest(string? digest)
+    {
+        const string prefix = "sha256:";
+
+        if (
+            string.IsNullOrWhiteSpace(digest) ||
+            !digest.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        string hex = digest[prefix.Length..].Trim();
+
+        return
+            hex.Length == 64 &&
+            hex.All(Uri.IsHexDigit)
+                ? hex.ToUpperInvariant()
+                : null;
     }
 
     public static string LatestReleaseUrl(string repository)
@@ -87,13 +151,11 @@ public static class UpdateCheck
                         item,
                         "browser_download_url");
 
+                    // The updater runs what it downloads: only
+                    // HTTPS assets on GitHub's own hosts qualify.
                     if (
                         string.IsNullOrWhiteSpace(name) ||
-                        string.IsNullOrWhiteSpace(url) ||
-                        !Uri.TryCreate(
-                            url,
-                            UriKind.Absolute,
-                            out _))
+                        !IsTrustedAssetUrl(url))
                     {
                         continue;
                     }
@@ -107,7 +169,13 @@ public static class UpdateCheck
                         sizeElement.TryGetInt64(out size);
                     }
 
-                    assets.Add(new ReleaseAsset(name, url, size));
+                    assets.Add(
+                        new ReleaseAsset(
+                            name,
+                            url!,
+                            size,
+                            ParseSha256Digest(
+                                GetString(item, "digest"))));
                 }
             }
 

@@ -27,10 +27,10 @@ public sealed class UpdateCheckTests
             "\"prerelease\":false," +
             "\"assets\":[" +
             "{\"name\":\"DeezNutzDownloader-portable-1.2.3.zip\"," +
-            "\"browser_download_url\":\"https://x.test/u.zip\"," +
+            "\"browser_download_url\":\"https://github.com/o/r/releases/download/v1.2.3/u.zip\"," +
             "\"size\":123}," +
             "{\"name\":\"notes.txt\"," +
-            "\"browser_download_url\":\"https://x.test/n.txt\"}]}";
+            "\"browser_download_url\":\"https://github.com/o/r/releases/download/v1.2.3/n.txt\"}]}";
 
         GitHubReleaseInfo? release = UpdateCheck.ParseRelease(json);
 
