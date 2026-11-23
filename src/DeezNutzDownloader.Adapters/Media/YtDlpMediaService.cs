@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using DeezNutzDownloader.Core.Downloads;
 
 namespace DeezNutzDownloader.Adapters.Media;
 
@@ -437,6 +438,104 @@ public static class YtDlpArgumentBuilder
     }
 }
 
+/// <summary>
+/// Finds the files a yt-dlp run produced, from its
+/// "--print after_move:filepath" output.
+/// </summary>
+internal static class YtDlpOutputFiles
+{
+    /// <summary>
+    /// Existing absolute paths printed on stdout, in order and
+    /// de-duplicated. Progress lines and other chatter never match.
+    /// </summary>
+    public static IReadOnlyList<string> ParsePrintedPaths(string? standardOutput)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var paths = new List<string>();
+
+        foreach (
+            string raw in (standardOutput ?? string.Empty).Split(
+                new[] { '\r', '\n' },
+                StringSplitOptions.RemoveEmptyEntries))
+        {
+            string line = raw.Trim().Trim('"');
+
+            if (
+                line.Length == 0 ||
+                !Path.IsPathRooted(line) ||
+                !File.Exists(line))
+            {
+                continue;
+            }
+
+            string full = Path.GetFullPath(line);
+
+            if (seen.Add(full))
+            {
+                paths.Add(full);
+            }
+        }
+
+        return paths;
+    }
+
+    /// <summary>
+    /// The media files plus sidecars yt-dlp wrote next to them in
+    /// this run ("Title [id].en.srt" beside "Title [id].mp4").
+    /// Siblings older than <paramref name="startedUtc"/> are left
+    /// alone so unrelated existing files are never touched.
+    /// </summary>
+    public static IReadOnlyList<string> WithSidecars(
+        IReadOnlyList<string> mediaFiles,
+        DateTime startedUtc)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var files = new List<string>();
+
+        foreach (string media in mediaFiles)
+        {
+            if (seen.Add(media))
+            {
+                files.Add(media);
+            }
+
+            string? directory = Path.GetDirectoryName(media);
+            string stem = Path.GetFileNameWithoutExtension(media);
+
+            if (string.IsNullOrEmpty(directory) || stem.Length == 0)
+            {
+                continue;
+            }
+
+            try
+            {
+                foreach (string candidate in Directory.EnumerateFiles(directory))
+                {
+                    string name = Path.GetFileName(candidate);
+
+                    if (
+                        name.Length > stem.Length + 1 &&
+                        name.StartsWith(stem + ".", StringComparison.OrdinalIgnoreCase) &&
+                        File.GetLastWriteTimeUtc(candidate) >= startedUtc &&
+                        seen.Add(candidate))
+                    {
+                        files.Add(candidate);
+                    }
+                }
+            }
+            catch (Exception exception)
+                when (
+                    exception is IOException or
+                    UnauthorizedAccessException)
+            {
+                // Marking sidecars is best effort.
+            }
+        }
+
+        return files;
+    }
+}
+
 public sealed class YtDlpMediaService : IYtDlpMediaService
 {
     private const int DefaultTimeoutSeconds = 120;
@@ -606,6 +705,10 @@ public sealed class YtDlpMediaService : IYtDlpMediaService
             fullDestination,
             "%(title)s [%(id)s].%(ext)s");
 
+        // Sidecars written by this run are newer than this; slack
+        // absorbs coarse file-system timestamps.
+        DateTime startedUtc = DateTime.UtcNow.AddSeconds(-2);
+
         List<string> arguments =
             YtDlpArgumentBuilder.BuildDownload(
                 source.AbsoluteUri,
@@ -638,6 +741,21 @@ public sealed class YtDlpMediaService : IYtDlpMediaService
                 exception);
         }
 
+        IReadOnlyList<string> mediaFiles =
+            YtDlpOutputFiles.ParsePrintedPaths(result.StandardOutput);
+
+        // Same protection as browser downloads: SmartScreen and
+        // Explorer treat the video and its subtitles as from the web.
+        // Done before the exit-code check: a playlist that fails
+        // halfway still leaves finished videos that need the mark.
+        foreach (
+            string file in YtDlpOutputFiles.WithSidecars(
+                mediaFiles,
+                startedUtc))
+        {
+            MarkOfTheWeb.TryApply(file, source);
+        }
+
         if (result.ExitCode != 0)
         {
             throw new InvalidOperationException(
@@ -654,16 +772,8 @@ public sealed class YtDlpMediaService : IYtDlpMediaService
             return fullDestination;
         }
 
-        string? finalPath = result.StandardOutput
-            .Split(
-                new[] { '\r', '\n' },
-                StringSplitOptions.RemoveEmptyEntries)
-            .Select(line => line.Trim().Trim('"'))
-            .LastOrDefault(
-                line =>
-                    !string.IsNullOrWhiteSpace(line) &&
-                    Path.IsPathRooted(line) &&
-                    File.Exists(line));
+        string? finalPath =
+            mediaFiles.Count == 0 ? null : mediaFiles[^1];
 
         if (finalPath is null)
         {
