@@ -254,7 +254,9 @@ public partial class MainWindow
                             new GofileResolver(),
                             new MediaFireResolver()
                         },
-                        new MegaDownloadService()));
+                        new MegaDownloadService())
+                        .WithBrowserDownloader(
+                            new WebViewBrowserDownloader(Dispatcher)));
 
             _activeDownloadHttpClient = httpClient;
             _activeDownloadOrchestrator = orchestrator;
@@ -565,6 +567,7 @@ public partial class MainWindow
         {
             new GofileResolver(),
             new PixeldrainResolver(),
+            new BunkrAlbumResolver(),
         };
 
         int expandedFolders = 0;

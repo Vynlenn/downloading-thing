@@ -471,6 +471,7 @@ public sealed class DownloadQueue
                         url,
                         DisplayName: file.SuggestedFileName ??
                             file.DownloadUri.Segments[^1].Trim('/'),
+                        TotalBytes: file.TotalBytes is > 0 ? file.TotalBytes : null,
                         PackageName: folder,
                         RelativeFolder: relative));
 

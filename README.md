@@ -27,6 +27,9 @@ Requires .NET 8 (self-contained in the portable zip).
     downloads, SHA-256 verified after each file.
   - Gofile shares — single files direct, folders expand to one queue row
     per file (subfolders kept).
+  - Bunkr albums expand to one row per file (names and sizes up front);
+    each file downloads through the built-in browser using Bunkr's own
+    page flow, one at a time, pop-ups blocked.
   - MediaFire shares, MEGA files and folders (client-side decryption),
     generic HTTP(S) with resume and 429/503 backoff.
   - yt-dlp video — format picker, playlists, subtitle sidecars,

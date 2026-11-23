@@ -56,6 +56,18 @@ public sealed class HttpDownloadTransferService
     private readonly IReadOnlyList<IHostFileResolver> _resolvers;
     private readonly IMegaDownloader? _megaDownloader;
     private readonly TimeSpan _stallTimeout;
+    private IBrowserDownloader? _browserDownloader;
+
+    /// <summary>
+    /// Downloads for hosts whose files only come through their own
+    /// page flow (Bunkr) go through this embedded-browser downloader.
+    /// </summary>
+    public HttpDownloadTransferService WithBrowserDownloader(
+        IBrowserDownloader browserDownloader)
+    {
+        _browserDownloader = browserDownloader;
+        return this;
+    }
 
     public HttpDownloadTransferService(
         HttpClient httpClient,
@@ -114,6 +126,20 @@ public sealed class HttpDownloadTransferService
             throw new NotAFileException(
                 source.Host,
                 MegaMissingKeyMessage);
+        }
+
+        if (BunkrLinks.IsAlbum(source))
+        {
+            throw new NotAFileException(
+                source.Host,
+                "This is a Bunkr album. Start the batch with Start all and it " +
+                "expands into one row per file first.");
+        }
+
+        if (BunkrLinks.IsFilePage(source))
+        {
+            return await DownloadViaBrowserAsync(request, source, progress, cancellationToken)
+                .ConfigureAwait(false);
         }
         string? suggestedFileName = null;
         long? advertisedTotalBytes = null;
@@ -1205,6 +1231,58 @@ public sealed class HttpDownloadTransferService
         "This MEGA link has no decryption key (the part after #), so " +
         "nothing can be downloaded. Copy the full link from MEGA, " +
         "including everything after the #, and add it again.";
+
+    private async Task<DownloadTransferResult> DownloadViaBrowserAsync(
+        DownloadTransferRequest request,
+        Uri page,
+        IProgress<DownloadTransferProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        if (_browserDownloader is null)
+        {
+            throw new NotAFileException(
+                page.Host,
+                "Bunkr files download through the built-in browser, which is " +
+                "not available here.");
+        }
+
+        string destinationDirectory =
+            ValidateDestinationDirectory(request.DestinationDirectory);
+
+        Directory.CreateDirectory(destinationDirectory);
+
+        BrowserDownloadResult downloaded =
+            await _browserDownloader
+                .DownloadAsync(page, destinationDirectory, null, progress, cancellationToken)
+                .ConfigureAwait(false);
+
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            string fileName =
+                SanitizeFileName(downloaded.SuggestedFileName) ??
+                SanitizeFileName(page.Segments[^1].Trim('/')) ??
+                "download";
+
+            // Same finishing as every other download: real extension,
+            // no overwrite, Mark of the Web pointing at the page.
+            return Complete(
+                downloaded.TemporaryPath,
+                destinationDirectory,
+                fileName,
+                page,
+                page,
+                downloaded.BytesWritten,
+                downloaded.BytesWritten,
+                downloaded.MediaType);
+        }
+        catch
+        {
+            TryDeleteTemporaryFile(downloaded.TemporaryPath);
+            throw;
+        }
+    }
 
     private static byte[] ReadHeader(string path)
     {
