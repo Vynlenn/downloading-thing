@@ -108,6 +108,13 @@ public sealed class HttpDownloadTransferService
 
         Uri source = ValidateSource(request.Source);
         Uri originalSource = source;
+
+        if (MegaLinks.IsMissingKey(source))
+        {
+            throw new NotAFileException(
+                source.Host,
+                MegaMissingKeyMessage);
+        }
         string? suggestedFileName = null;
         long? advertisedTotalBytes = null;
         string? expectedSha256 = null;
@@ -207,6 +214,7 @@ public sealed class HttpDownloadTransferService
         long? totalBytes = advertisedTotalBytes;
         string? fileName = null;
         RangeConditionHeaderValue? resumeValidator = null;
+        string? responseMediaType = null;
 
         // Set while the segmented engine owns the resume state, so
         // the single-stream save below never overwrites its map.
@@ -450,6 +458,24 @@ public sealed class HttpDownloadTransferService
                     response.StatusCode ==
                         System.Net.HttpStatusCode.PartialContent;
 
+                responseMediaType = content.Headers.ContentType?.MediaType;
+
+                // A share/album/login page instead of the file: saving
+                // it as a finished download hid the problem.
+                if (
+                    !isPartial &&
+                    FileTypeSniffer.IsWebPage(
+                        responseMediaType,
+                        GetContentDispositionFileName(content.Headers) is not null,
+                        response.RequestMessage?.RequestUri ?? source))
+                {
+                    throw new NotAFileException(
+                        source.Host,
+                        $"{originalSource.Host} sent a web page, not a file. " +
+                        "This is probably a share or album page: paste it in the " +
+                        "Link Grabber and use Crawl page to collect its files.");
+                }
+
                 ContentRangeHeaderValue? answeredRange =
                     content.Headers.ContentRange;
 
@@ -629,7 +655,8 @@ public sealed class HttpDownloadTransferService
                                     originalSource,
                                     segmentTotal,
                                     expectedSha256,
-                                    ref pendingTemporaryPath);
+                                    ref pendingTemporaryPath,
+                                    responseMediaType);
                             }
 
                             DownloadTransferResult segmentedResult =
@@ -640,7 +667,8 @@ public sealed class HttpDownloadTransferService
                                     source,
                                     originalSource,
                                     segmentTotal,
-                                    segmentTotal);
+                                    segmentTotal,
+                                    responseMediaType);
 
                             pendingTemporaryPath = null;
                             return segmentedResult;
@@ -901,7 +929,8 @@ public sealed class HttpDownloadTransferService
                         source,
                         originalSource,
                         bytesWritten,
-                        totalBytes);
+                        totalBytes,
+                        responseMediaType);
 
                 pendingTemporaryPath = null;
 
@@ -919,7 +948,12 @@ public sealed class HttpDownloadTransferService
         {
             if (resumeKey is not null && pendingTemporaryPath is not null)
             {
-                if (exception is ChecksumMismatchException)
+                if (exception is NotAFileException)
+                {
+                    // Nothing worth resuming: drop the partial entirely.
+                    PartialDownloadFiles.Delete(destinationDirectory, resumeKey);
+                }
+                else if (exception is ChecksumMismatchException)
                 {
                     // The bytes are wrong: never resume from them.
                     // The file itself stays for inspection.
@@ -973,8 +1007,16 @@ public sealed class HttpDownloadTransferService
         Uri source,
         Uri originalSource,
         long bytesWritten,
-        long? totalBytes)
+        long? totalBytes,
+        string? mediaType = null)
     {
+        // Servers that name files by id ("89d50f21") give no
+        // extension; the first bytes say what the file really is.
+        fileName = FileTypeSniffer.EnsureExtension(
+            fileName,
+            ReadHeader(temporaryPath),
+            mediaType);
+
         string destinationPath =
             MoveToAvailableDestination(
                 temporaryPath,
@@ -1036,7 +1078,8 @@ public sealed class HttpDownloadTransferService
         Uri originalSource,
         long totalBytes,
         string? expectedSha256,
-        ref string? pendingTemporaryPath)
+        ref string? pendingTemporaryPath,
+        string? mediaType = null)
     {
         // Segments land out of order, so a host hash (rare here)
         // is checked against the finished file.
@@ -1050,7 +1093,8 @@ public sealed class HttpDownloadTransferService
                 source,
                 originalSource,
                 totalBytes,
-                totalBytes);
+                totalBytes,
+                mediaType);
 
         pendingTemporaryPath = null;
         PartialDownloadFiles.DeleteState(destinationDirectory, resumeKey);
@@ -1154,6 +1198,29 @@ public sealed class HttpDownloadTransferService
         finally
         {
             ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    internal const string MegaMissingKeyMessage =
+        "This MEGA link has no decryption key (the part after #), so " +
+        "nothing can be downloaded. Copy the full link from MEGA, " +
+        "including everything after the #, and add it again.";
+
+    private static byte[] ReadHeader(string path)
+    {
+        try
+        {
+            using var stream = new FileStream(
+                path, FileMode.Open, FileAccess.Read, FileShare.Read);
+
+            byte[] header = new byte[FileTypeSniffer.HeaderBytesNeeded];
+            int read = stream.Read(header, 0, header.Length);
+            return header[..read];
+        }
+        catch (Exception exception)
+            when (exception is IOException or UnauthorizedAccessException)
+        {
+            return Array.Empty<byte>();
         }
     }
 

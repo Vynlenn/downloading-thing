@@ -102,6 +102,13 @@ public sealed class LinkChecker
     {
         ArgumentNullException.ThrowIfNull(url);
 
+        if (MegaLinks.IsMissingKey(url))
+        {
+            return new LinkCheckResult(
+                LinkCheckStatus.NeedsAttention,
+                HttpDownloadTransferService.MegaMissingKeyMessage);
+        }
+
         if (MegaLinks.IsLink(url))
         {
             return new LinkCheckResult(

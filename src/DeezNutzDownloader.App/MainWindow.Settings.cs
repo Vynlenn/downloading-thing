@@ -61,6 +61,8 @@ public partial class MainWindow
         ProxyPortTextBox.Text = _settings.ProxyPort.ToString();
         ProxyUsernameTextBox.Text = _settings.ProxyUsername;
         ProxyPasswordBox.Password = string.Empty;
+        PixeldrainApiKeyBox.Password = string.Empty;
+        UpdatePixeldrainKeyStatus();
         ConcurrencyTextBox.Text =
             _settings.MaximumConcurrentDownloads.ToString();
         ConnectionsTextBox.Text =
@@ -321,11 +323,23 @@ public partial class MainWindow
                 _settings.ProxyPasswordProtected = string.Empty;
             }
 
+            // A typed key replaces the saved one; empty keeps it
+            // (Remove key clears it explicitly).
+            if (PixeldrainApiKeyBox.Password.Trim().Length > 0)
+            {
+                _settings.PixeldrainApiKeyProtected =
+                    ProxyCredentialProtector.Protect(
+                        PixeldrainApiKeyBox.Password.Trim());
+
+                PixeldrainApiKeyBox.Password = string.Empty;
+            }
+
             // Immediate feedback: bad host/port, SOCKS, or an
             // undecryptable password fails here, not mid-batch.
             DownloadHttpClientFactory.Validate(_settings);
 
             await _settingsStore.SaveAsync(_settings);
+        UpdatePixeldrainKeyStatus();
             await _log.InformationAsync(
                 "Application settings were saved.");
 
@@ -428,5 +442,72 @@ public partial class MainWindow
         return fallback;
     }
 
+    private void UpdatePixeldrainKeyStatus()
+    {
+        bool saved = !string.IsNullOrEmpty(_settings.PixeldrainApiKeyProtected);
+
+        PixeldrainKeyStatusText.Text = saved
+            ? "A key is saved and used for Pixeldrain downloads."
+            : "No key saved: Pixeldrain's free per-IP limits apply.";
+
+        RemovePixeldrainKeyButton.IsEnabled = saved;
+    }
+
+    private async void CheckPixeldrainKey_Click(object sender, RoutedEventArgs e)
+    {
+        // Check what is typed, or else the saved key.
+        string? key = PixeldrainApiKeyBox.Password.Trim();
+
+        if (key.Length == 0)
+        {
+            key = ProxyCredentialProtector.Unprotect(_settings.PixeldrainApiKeyProtected);
+        }
+
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            PixeldrainKeyStatusText.Text = "Paste a key first.";
+            return;
+        }
+
+        CheckPixeldrainKeyButton.IsEnabled = false;
+        PixeldrainKeyStatusText.Text = "Checking with Pixeldrain…";
+
+        try
+        {
+            using HttpClient client = DownloadHttpClientFactory.Create(_settings);
+            PixeldrainKeyCheck result = await PixeldrainAccount.CheckKeyAsync(client, key);
+
+            PixeldrainKeyStatusText.Text =
+                result.Message +
+                (result.Valid && PixeldrainApiKeyBox.Password.Trim().Length > 0
+                    ? " Press Save settings to keep it."
+                    : string.Empty);
+        }
+        catch (Exception exception)
+        {
+            PixeldrainKeyStatusText.Text = $"Could not check the key: {exception.Message}";
+        }
+        finally
+        {
+            CheckPixeldrainKeyButton.IsEnabled = true;
+        }
+    }
+
+    private async void RemovePixeldrainKey_Click(object sender, RoutedEventArgs e)
+    {
+        _settings.PixeldrainApiKeyProtected = string.Empty;
+        PixeldrainApiKeyBox.Password = string.Empty;
+
+        try
+        {
+            await _settingsStore.SaveAsync(_settings);
+            UpdatePixeldrainKeyStatus();
+            PixeldrainKeyStatusText.Text = "Key removed.";
+        }
+        catch (Exception exception)
+        {
+            PixeldrainKeyStatusText.Text = $"Could not save: {exception.Message}";
+        }
+    }
 }
 

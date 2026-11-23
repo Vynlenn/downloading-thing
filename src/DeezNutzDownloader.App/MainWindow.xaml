@@ -1045,6 +1045,38 @@
                                            FontWeight="SemiBold" />
                                 <TextBox x:Name="FFmpegPathTextBox" />
                                 <TextBlock Margin="0,12,0,6"
+                                           Text="Pixeldrain API key (optional)"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Margin="0,0,0,6"
+                                           Text="Your own key from pixeldrain.com/user/api_keys. With Pixeldrain Pro it lifts the free daily limit. Stored encrypted for your Windows account and only ever sent to Pixeldrain over HTTPS."
+                                           Foreground="{DynamicResource MutedTextBrush}"
+                                           TextWrapping="Wrap" />
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <PasswordBox x:Name="PixeldrainApiKeyBox"
+                                                 ToolTip="Paste a key and Save settings. Leave empty to keep the saved key." />
+                                    <Button x:Name="CheckPixeldrainKeyButton"
+                                            Grid.Column="1"
+                                            Margin="8,0,0,0"
+                                            Content="Check key"
+                                            Style="{StaticResource SecondaryButtonStyle}"
+                                            Click="CheckPixeldrainKey_Click" />
+                                    <Button x:Name="RemovePixeldrainKeyButton"
+                                            Grid.Column="2"
+                                            Margin="8,0,0,0"
+                                            Content="Remove key"
+                                            Style="{StaticResource SecondaryButtonStyle}"
+                                            Click="RemovePixeldrainKey_Click" />
+                                </Grid>
+                                <TextBlock x:Name="PixeldrainKeyStatusText"
+                                           Margin="0,6,0,0"
+                                           Foreground="{DynamicResource MutedTextBrush}"
+                                           TextWrapping="Wrap" />
+                                <TextBlock Margin="0,12,0,6"
                                            Text="7-Zip path for RAR/7z (optional)"
                                            FontWeight="SemiBold" />
                                 <TextBox x:Name="SevenZipPathTextBox"

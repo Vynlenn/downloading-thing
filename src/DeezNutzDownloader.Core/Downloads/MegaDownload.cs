@@ -45,6 +45,37 @@ public interface IMegaDownloader
 
 public static class MegaLinks
 {
+    /// <summary>
+    /// A MEGA file/folder link without its #key: MEGA serves only a
+    /// web page for it and nothing can be decrypted, so it must be
+    /// reported instead of "downloaded".
+    /// </summary>
+    public static bool IsMissingKey(Uri? uri)
+    {
+        if (uri is null || !uri.IsAbsoluteUri || !IsMegaHost(uri.Host))
+        {
+            return false;
+        }
+
+        string[] segments = uri.AbsolutePath
+            .Split('/', StringSplitOptions.RemoveEmptyEntries);
+
+        return
+            segments.Length == 2 &&
+            (segments[0] == "file" || segments[0] == "folder") &&
+            uri.Fragment.Length <= 1;
+    }
+
+    private static bool IsMegaHost(string host)
+    {
+        return
+            host.Equals("mega.nz", StringComparison.OrdinalIgnoreCase) ||
+            host.Equals("mega.io", StringComparison.OrdinalIgnoreCase) ||
+            host.Equals("mega.co.nz", StringComparison.OrdinalIgnoreCase) ||
+            host.EndsWith(".mega.nz", StringComparison.OrdinalIgnoreCase) ||
+            host.EndsWith(".mega.io", StringComparison.OrdinalIgnoreCase);
+    }
+
     public static bool IsLink(Uri? uri)
     {
         if (uri is null || !uri.IsAbsoluteUri)

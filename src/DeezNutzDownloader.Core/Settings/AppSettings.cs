@@ -46,6 +46,12 @@ public sealed class AppSettings
     /// </summary>
     public string ProxyPasswordProtected { get; set; } = string.Empty;
 
+    /// <summary>
+    /// The user's Pixeldrain API key, DPAPI-encrypted like the proxy
+    /// password. The cleartext key is never persisted.
+    /// </summary>
+    public string PixeldrainApiKeyProtected { get; set; } = string.Empty;
+
     public bool AskBeforeArchiveExtraction { get; set; } = true;
 
     public bool SkipExactDuplicates { get; set; } = true;

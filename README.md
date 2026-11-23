@@ -43,6 +43,13 @@ Requires .NET 8 (self-contained in the portable zip).
   stopped (validated with If-Range so a changed file is never spliced).
 - **Host limits** — quota and rate limits are waited out automatically
   inside the batch (partial file kept), never dodged.
+- **Pixeldrain API key** — optional; with Pixeldrain Pro it lifts the
+  free daily limit. Stored DPAPI-encrypted, sent only to Pixeldrain
+  over HTTPS. Settings → Pixeldrain API key → Check key.
+- **Honest results** — a link that returns a web page (share/album
+  page, keyless MEGA link) fails with a clear message instead of
+  being saved as a "completed" download; id-named files get their
+  real extension (.png, .mp4, …).
 - **Safety** — Mark of the Web on everything downloaded or extracted,
   warnings for programs and disguised files, filename-spoofing cleanup,
   hardened archive extraction, verified self-updates.
