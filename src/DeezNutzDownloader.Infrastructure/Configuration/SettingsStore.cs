@@ -57,6 +57,12 @@ public sealed class SettingsStore
                 settingsChanged = true;
             }
 
+            if (settings.ConnectionsPerDownload is < 1 or > 16)
+            {
+                settings.ConnectionsPerDownload = 4;
+                settingsChanged = true;
+            }
+
             if (settings.ProxyPort is < 1 or > 65535)
             {
                 settings.ProxyPort = 8080;

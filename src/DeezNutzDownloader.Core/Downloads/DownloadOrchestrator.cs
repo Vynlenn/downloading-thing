@@ -64,7 +64,8 @@ public sealed class DownloadOrchestrator : IDisposable
         string destinationDirectory,
         int maximumConcurrency,
         CancellationToken cancellationToken = default,
-        long? maxBytesPerSecond = null)
+        long? maxBytesPerSecond = null,
+        int connectionsPerDownload = 1)
     {
         string normalizedDestination =
             ValidateDestinationDirectory(
@@ -134,11 +135,11 @@ public sealed class DownloadOrchestrator : IDisposable
             )
             {
                 workers[workerIndex] = RunWorkerAsync(
-                    selectedItems,
                     normalizedDestination,
                     state,
                     runCancellation.Token,
-                    maxBytesPerSecond);
+                    maxBytesPerSecond,
+                    Math.Max(1, connectionsPerDownload));
             }
 
             await Task.WhenAll(workers)
@@ -232,11 +233,11 @@ public sealed class DownloadOrchestrator : IDisposable
     }
 
     private async Task RunWorkerAsync(
-        IReadOnlyList<DownloadQueueItem> selectedItems,
         string destinationDirectory,
         BatchWorkState state,
         CancellationToken cancellationToken,
-        long? maxBytesPerSecond = null)
+        long? maxBytesPerSecond,
+        int connectionsPerDownload)
     {
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -286,7 +287,8 @@ public sealed class DownloadOrchestrator : IDisposable
                         destinationDirectory,
                         state,
                         cancellationToken,
-                        maxBytesPerSecond)
+                        maxBytesPerSecond,
+                        connectionsPerDownload)
                     .ConfigureAwait(false);
             }
             finally
@@ -354,7 +356,8 @@ public sealed class DownloadOrchestrator : IDisposable
         string destinationDirectory,
         BatchWorkState state,
         CancellationToken cancellationToken,
-        long? maxBytesPerSecond)
+        long? maxBytesPerSecond,
+        int connectionsPerDownload)
     {
         string itemDirectory =
             ResolveItemDirectory(
@@ -366,7 +369,8 @@ public sealed class DownloadOrchestrator : IDisposable
             var request = new DownloadTransferRequest(
                 new Uri(item.Url, UriKind.Absolute),
                 itemDirectory,
-                maxBytesPerSecond);
+                maxBytesPerSecond,
+                connectionsPerDownload);
 
             var progress =
                 new InlineProgress<

@@ -571,6 +571,17 @@
                                          Width="120"
                                          HorizontalAlignment="Left" />
 
+                                <TextBlock Margin="0,18,0,6"
+                                           Text="Connections per file"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Margin="0,0,0,6"
+                                           Text="Large files (4 MB+) on servers that allow it download over several connections at once (1 to 16; 1 turns this off). Free file hosts like Pixeldrain, Gofile, MEGA and MediaFire always use one."
+                                           Foreground="{DynamicResource MutedTextBrush}"
+                                           TextWrapping="Wrap" />
+                                <TextBox x:Name="ConnectionsTextBox"
+                                         Width="120"
+                                         HorizontalAlignment="Left" />
+
                                 <CheckBox x:Name="OrganizeFoldersCheckBox"
                                           Margin="0,14,0,0"
                                           Content="Organize downloads into site subfolders" />

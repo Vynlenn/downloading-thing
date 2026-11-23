@@ -52,6 +52,13 @@ public sealed class AppSettings
 
     public int MaximumConcurrentDownloads { get; set; } = 3;
 
+    /// <summary>
+    /// Parallel range connections per large file (1 = off). Only
+    /// used on servers that support ranges; free file hosts always
+    /// get a single connection.
+    /// </summary>
+    public int ConnectionsPerDownload { get; set; } = 4;
+
     public string YtDlpPath { get; set; } = string.Empty;
 
     public string FFmpegPath { get; set; } = string.Empty;

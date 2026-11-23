@@ -351,6 +351,94 @@ public sealed class HttpDownloadTransferService
                             preferSuggestedName);
                 }
 
+                // Large files on range-capable servers download over
+                // several connections at once. Free file hosts are
+                // excluded: they throttle per IP and extra
+                // connections burn quota or trigger bans.
+                if (
+                    attempt == 1 &&
+                    bytesWritten == 0 &&
+                    hasher is null &&
+                    request.Connections > 1 &&
+                    request.MaxBytesPerSecond is not > 0 &&
+                    totalBytes is long segmentTotal &&
+                    !HostThrottlePolicy.IsSingleLaneHost(source.Host) &&
+                    !HostThrottlePolicy.IsSingleLaneHost(originalSource.Host) &&
+                    SegmentedDownloader.SupportsRanges(response))
+                {
+                    int connections =
+                        SegmentedDownloader.PlanConnectionCount(
+                            segmentTotal,
+                            request.Connections);
+
+                    if (connections > 1)
+                    {
+                        // Ranges go to the post-redirect URL the
+                        // server actually answered from.
+                        Uri rangeSource =
+                            response.RequestMessage?.RequestUri is
+                                { IsAbsoluteUri: true } answered
+                                ? answered
+                                : source;
+
+                        RangeConditionHeaderValue? validator =
+                            SegmentedDownloader.BuildValidator(response);
+
+                        // Release the probe connection before
+                        // opening the range connections.
+                        response.Dispose();
+
+                        bool segmented;
+
+                        try
+                        {
+                            segmented =
+                                await new SegmentedDownloader(
+                                        _httpClient,
+                                        _stallTimeout)
+                                    .DownloadAsync(
+                                        rangeSource,
+                                        temporaryPath,
+                                        segmentTotal,
+                                        connections,
+                                        validator,
+                                        progress,
+                                        cancellationToken)
+                                    .ConfigureAwait(false);
+                        }
+                        catch (Exception exception)
+                            when (
+                                exception is HttpRequestException or
+                                    IOException &&
+                                !cancellationToken.IsCancellationRequested)
+                        {
+                            // Anything odd: one clean single stream.
+                            segmented = false;
+                        }
+
+                        if (segmented)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+
+                            DownloadTransferResult segmentedResult =
+                                Complete(
+                                    temporaryPath,
+                                    destinationDirectory,
+                                    fileName!,
+                                    source,
+                                    originalSource,
+                                    segmentTotal,
+                                    segmentTotal);
+
+                            pendingTemporaryPath = null;
+                            return segmentedResult;
+                        }
+
+                        TruncateFile(temporaryPath);
+                        continue;
+                    }
+                }
+
                 byte[] buffer =
                     ArrayPool<byte>.Shared.Rent(BufferSize);
 
@@ -560,25 +648,18 @@ public sealed class HttpDownloadTransferService
                         source);
                 }
 
-                string destinationPath =
-                    MoveToAvailableDestination(
+                DownloadTransferResult result =
+                    Complete(
                         temporaryPath,
                         destinationDirectory,
-                        fileName!);
+                        fileName!,
+                        source,
+                        originalSource,
+                        bytesWritten,
+                        totalBytes);
 
                 pendingTemporaryPath = null;
-
-                MarkOfTheWeb.TryApply(
-                    destinationPath,
-                    source,
-                    originalSource);
-
-                return new DownloadTransferResult(
-                    source,
-                    destinationPath,
-                    Path.GetFileName(destinationPath),
-                    bytesWritten,
-                    totalBytes);
+                return result;
             }
         }
         catch (Exception exception)
@@ -599,6 +680,38 @@ public sealed class HttpDownloadTransferService
         {
             hasher?.Dispose();
         }
+    }
+
+    /// <summary>
+    /// Moves the finished temp file to a free name and marks it as
+    /// downloaded from the internet.
+    /// </summary>
+    private static DownloadTransferResult Complete(
+        string temporaryPath,
+        string destinationDirectory,
+        string fileName,
+        Uri source,
+        Uri originalSource,
+        long bytesWritten,
+        long? totalBytes)
+    {
+        string destinationPath =
+            MoveToAvailableDestination(
+                temporaryPath,
+                destinationDirectory,
+                fileName);
+
+        MarkOfTheWeb.TryApply(
+            destinationPath,
+            source,
+            originalSource);
+
+        return new DownloadTransferResult(
+            source,
+            destinationPath,
+            Path.GetFileName(destinationPath),
+            bytesWritten,
+            totalBytes);
     }
 
     private static void ResetHash(ref IncrementalHash? hasher)

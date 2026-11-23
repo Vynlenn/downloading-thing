@@ -128,6 +128,8 @@ public partial class MainWindow : Window
         ProxyPasswordBox.Password = string.Empty;
         ConcurrencyTextBox.Text =
             _settings.MaximumConcurrentDownloads.ToString();
+        ConnectionsTextBox.Text =
+            _settings.ConnectionsPerDownload.ToString();
         YtDlpPathTextBox.Text = _settings.YtDlpPath;
         FFmpegPathTextBox.Text = _settings.FFmpegPath;
         YtDlpCookiesTextBox.Text =
@@ -1033,7 +1035,8 @@ public partial class MainWindow : Window
                     destinationDirectory,
                     maximumConcurrency,
                     CancellationToken.None,
-                    batchCap);
+                    batchCap,
+                    _settings.ConnectionsPerDownload);
 
             RefreshDownloadQueue();
 
@@ -2305,8 +2308,19 @@ public partial class MainWindow : Window
                     "Concurrent downloads must be between 1 and 64.");
             }
 
+            if (!int.TryParse(
+                    ConnectionsTextBox.Text.Trim(),
+                    out int connectionsPerDownload) ||
+                connectionsPerDownload is < 1 or > 16)
+            {
+                throw new InvalidOperationException(
+                    "Connections per file must be between 1 and 16.");
+            }
+
             _settings.MaximumConcurrentDownloads =
                 maximumConcurrency;
+            _settings.ConnectionsPerDownload =
+                connectionsPerDownload;
             _settings.YtDlpPath = YtDlpPathTextBox.Text.Trim();
             _settings.FFmpegPath = FFmpegPathTextBox.Text.Trim();
             _settings.YtDlpCookiesFromBrowser =
