@@ -136,9 +136,27 @@ public sealed class HttpDownloadTransferService
                 "expands into one row per file first.");
         }
 
+        if (FilesterLinks.IsThumbnail(source))
+        {
+            throw new NotAFileException(
+                source.Host,
+                "This is a Filester thumbnail preview (/t/...), not the file. " +
+                "Use the file's share link instead (filester.me/d/...).");
+        }
+
         if (BunkrLinks.IsFilePage(source))
         {
-            return await DownloadViaBrowserAsync(request, source, progress, cancellationToken)
+            return await DownloadViaBrowserAsync(
+                    request, source, BrowserDownloadMode.Bunkr, progress, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        // Filester file pages, and anything the user chose to fetch
+        // in the browser ("Download in browser").
+        if (request.ViaBrowser || FilesterLinks.IsFilePage(source))
+        {
+            return await DownloadViaBrowserAsync(
+                    request, source, BrowserDownloadMode.Generic, progress, cancellationToken)
                 .ConfigureAwait(false);
         }
         string? suggestedFileName = null;
@@ -498,8 +516,9 @@ public sealed class HttpDownloadTransferService
                     throw new NotAFileException(
                         source.Host,
                         $"{originalSource.Host} sent a web page, not a file. " +
-                        "This is probably a share or album page: paste it in the " +
-                        "Link Grabber and use Crawl page to collect its files.");
+                        "This is probably a share or album page: right-click it " +
+                        "and choose Download in browser, or use Crawl page in the " +
+                        "Link Grabber to collect its files.");
                 }
 
                 ContentRangeHeaderValue? answeredRange =
@@ -1235,6 +1254,7 @@ public sealed class HttpDownloadTransferService
     private async Task<DownloadTransferResult> DownloadViaBrowserAsync(
         DownloadTransferRequest request,
         Uri page,
+        BrowserDownloadMode mode,
         IProgress<DownloadTransferProgress>? progress,
         CancellationToken cancellationToken)
     {
@@ -1242,8 +1262,8 @@ public sealed class HttpDownloadTransferService
         {
             throw new NotAFileException(
                 page.Host,
-                "Bunkr files download through the built-in browser, which is " +
-                "not available here.");
+                $"Files from {page.Host} download through the built-in browser, " +
+                "which is not available here.");
         }
 
         string destinationDirectory =
@@ -1253,7 +1273,7 @@ public sealed class HttpDownloadTransferService
 
         BrowserDownloadResult downloaded =
             await _browserDownloader
-                .DownloadAsync(page, destinationDirectory, null, progress, cancellationToken)
+                .DownloadAsync(page, destinationDirectory, mode, progress, cancellationToken)
                 .ConfigureAwait(false);
 
         try

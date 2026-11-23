@@ -233,7 +233,7 @@ public sealed class BunkrTests : IDisposable
         public async Task<BrowserDownloadResult> DownloadAsync(
             Uri page,
             string destinationDirectory,
-            string? displayName,
+            BrowserDownloadMode mode,
             IProgress<DownloadTransferProgress>? progress,
             CancellationToken cancellationToken)
         {

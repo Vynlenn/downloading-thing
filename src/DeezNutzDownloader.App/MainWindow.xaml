@@ -319,6 +319,8 @@
                                             <MenuItem x:Name="MenuResume" Header="Resume / retry" Click="ResumeSelected_Click" />
                                             <MenuItem x:Name="MenuPause" Header="Pause" Click="PauseSelected_Click" />
                                             <MenuItem x:Name="MenuCancel" Header="Cancel download" Click="CancelSelected_Click" />
+                                            <MenuItem x:Name="MenuViaBrowser" Header="Download in browser" Click="DownloadInBrowser_Click"
+                                                      ToolTip="For links that open a page instead of the file: the built-in browser presses the page's Download button (or you do), and the file is caught." />
                                             <Separator />
                                             <MenuItem x:Name="MenuDownloadNext" Header="Download next" Click="DownloadNext_Click" />
                                             <MenuItem x:Name="MenuMoveUp" Header="Move up" Click="MoveUp_Click" />

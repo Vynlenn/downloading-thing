@@ -18,11 +18,45 @@ namespace DeezNutzDownloader.App;
 /// </summary>
 internal sealed class BrowserDownloadWindow : Window
 {
-    private static readonly TimeSpan StartDeadline = TimeSpan.FromMinutes(2);
+    private static readonly TimeSpan ScriptedDeadline = TimeSpan.FromMinutes(2);
+
+    // Generic pages may need the user to press the button themselves.
+    private static readonly TimeSpan GenericDeadline = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan ClickRetryAfter = TimeSpan.FromSeconds(20);
     private const int MaximumClicks = 3;
+    private const int MaximumGenericClicks = 2;
+
+    // Finds the page's own Download control: visible, short label,
+    // and either a button or a link that stays on the same site, so
+    // ads that lead elsewhere are never pressed.
+    private const string GenericClickScript = """
+        (() => {
+          const re = /download/i;
+          const base = (h) => h.split('.').slice(-2).join('.');
+          const sameSite = (href) => {
+            try { const u = new URL(href, location.href);
+                  return u.protocol === 'https:' && base(u.hostname) === base(location.hostname); }
+            catch { return false; }
+          };
+          const visible = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+          const label = (el) => (el.innerText || el.value || el.getAttribute('aria-label') || el.title || '').trim();
+          const found = [...document.querySelectorAll(
+              'a[href], button, input[type=submit], input[type=button], [role=button]')]
+            .filter(visible)
+            .filter(el => el.hasAttribute('download') ||
+                          (re.test(label(el)) && label(el).length <= 40) ||
+                          re.test(el.id || ''))
+            .filter(el => el.tagName !== 'A' || sameSite(el.getAttribute('href')));
+          if (!found.length) return null;
+          found.sort((a, b) => b.hasAttribute('download') - a.hasAttribute('download'));
+          const el = found[0];
+          el.click();
+          return label(el).slice(0, 40) || el.tagName.toLowerCase();
+        })()
+        """;
 
     private readonly Uri _page;
+    private readonly BrowserDownloadMode _mode;
     private readonly string _temporaryPath;
     private readonly IProgress<DownloadTransferProgress>? _progress;
     private readonly WebView2 _browser = new();
@@ -39,13 +73,16 @@ internal sealed class BrowserDownloadWindow : Window
     private int _clicks;
     private bool _onDownloadPage;
     private bool _finished;
+    private bool _askedForUser;
 
     public BrowserDownloadWindow(
         Uri page,
         string destinationDirectory,
+        BrowserDownloadMode mode,
         IProgress<DownloadTransferProgress>? progress)
     {
         _page = page;
+        _mode = mode;
         _progress = progress;
         _temporaryPath = Path.Combine(
             destinationDirectory,
@@ -54,13 +91,19 @@ internal sealed class BrowserDownloadWindow : Window
         Title = $"Downloading from {page.Host}";
         Width = 900;
         Height = 640;
+        // Never steal focus: keystrokes meant for another app must not
+        // land here (or in a prompt that appears when this closes).
+        // The window comes forward only when it needs the user.
         ShowActivated = false;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         SetResourceReference(BackgroundProperty, "AppBackgroundBrush");
 
-        _status.Text =
-            $"Opening {page.Host}… The download starts on its own. " +
-            "If the page shows a check, complete it here.";
+        _status.Text = mode == BrowserDownloadMode.Generic
+            ? $"Opening {page.Host}… The app presses the page's Download button if it " +
+              "finds one. If nothing starts, press the download button yourself: the " +
+              "file is caught automatically."
+            : $"Opening {page.Host}… The download starts on its own. " +
+              "If the page shows a check, complete it here.";
 
         var layout = new DockPanel();
         DockPanel.SetDock(_status, Dock.Top);
@@ -92,7 +135,9 @@ internal sealed class BrowserDownloadWindow : Window
             core.DownloadStarting += Core_DownloadStarting;
             core.Settings.AreDefaultScriptDialogsEnabled = false;
 
-            _deadline = DateTime.UtcNow + StartDeadline;
+            _deadline = DateTime.UtcNow +
+                (_mode == BrowserDownloadMode.Generic ? GenericDeadline : ScriptedDeadline);
+            _lastClick = DateTime.UtcNow;
             core.Navigate(_page.AbsoluteUri);
             _driver.Start();
         }
@@ -117,9 +162,15 @@ internal sealed class BrowserDownloadWindow : Window
         {
             Fail(new NotAFileException(
                 _page.Host,
-                $"{_page.Host} did not start the download within 2 minutes. " +
-                "The file may be removed, or the page needs a check: retry and " +
-                "complete it in the window."));
+                $"{_page.Host} did not start a download in time. The file may be " +
+                "removed, or the page needs a check or a click: retry and finish " +
+                "it in the window."));
+            return;
+        }
+
+        if (_mode == BrowserDownloadMode.Generic)
+        {
+            await GenericStepAsync(core);
             return;
         }
 
@@ -172,6 +223,52 @@ internal sealed class BrowserDownloadWindow : Window
         }
         catch (Exception exception)
             when (exception is InvalidOperationException or System.Runtime.InteropServices.COMException)
+        {
+            // Page mid-navigation; the next tick tries again.
+        }
+    }
+
+    private async Task GenericStepAsync(CoreWebView2 core)
+    {
+        // Give the page a moment to render, then try its button at
+        // most twice; after that the user presses it.
+        if (
+            _clicks >= MaximumGenericClicks ||
+            DateTime.UtcNow - _lastClick < TimeSpan.FromSeconds(_clicks == 0 ? 3 : 15))
+        {
+            return;
+        }
+
+        try
+        {
+            string json = await core.ExecuteScriptAsync(GenericClickScript);
+            _lastClick = DateTime.UtcNow;
+
+            if (System.Text.Json.JsonSerializer.Deserialize<string?>(json) is string pressed)
+            {
+                _clicks++;
+                _status.Text =
+                    $"Pressed the page's \"{pressed}\" button; waiting for the file… " +
+                    "If nothing starts, press the download button yourself.";
+            }
+            else
+            {
+                _status.Text =
+                    "No download button found automatically. Press the page's " +
+                    "download button: the file is caught automatically.";
+
+                // Now the user is needed: bring the window forward once.
+                if (!_askedForUser)
+                {
+                    _askedForUser = true;
+                    Activate();
+                }
+            }
+        }
+        catch (Exception exception)
+            when (exception is InvalidOperationException or
+                System.Runtime.InteropServices.COMException or
+                System.Text.Json.JsonException)
         {
             // Page mid-navigation; the next tick tries again.
         }
@@ -308,13 +405,13 @@ internal sealed class WebViewBrowserDownloader : IBrowserDownloader
     public Task<BrowserDownloadResult> DownloadAsync(
         Uri page,
         string destinationDirectory,
-        string? displayName,
+        BrowserDownloadMode mode,
         IProgress<DownloadTransferProgress>? progress,
         CancellationToken cancellationToken)
     {
         return _dispatcher
             .InvokeAsync(() =>
-                new BrowserDownloadWindow(page, destinationDirectory, progress)
+                new BrowserDownloadWindow(page, destinationDirectory, mode, progress)
                     .RunAsync(cancellationToken))
             .Task
             .Unwrap();

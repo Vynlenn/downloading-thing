@@ -52,7 +52,9 @@ public partial class MainWindow
                 $"{(archives.Count == 1 ? "" : "s")} finished. Extract now?",
                 "Extract archives",
                 MessageBoxButton.YesNo,
-                MessageBoxImage.Question);
+                MessageBoxImage.Question,
+                // A stray Enter must never unpack anything.
+                MessageBoxResult.No);
 
             if (answer != MessageBoxResult.Yes)
             {

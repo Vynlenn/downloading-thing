@@ -15,7 +15,8 @@ public sealed record DownloadTransferRequest(
     string DestinationDirectory,
     long? MaxBytesPerSecond = null,
     int Connections = 1,
-    string? ResumeKey = null);
+    string? ResumeKey = null,
+    bool ViaBrowser = false);
 
 public sealed record DownloadTransferProgress(
     long BytesReceived,

@@ -1,5 +1,19 @@
 namespace DeezNutzDownloader.Core.Downloads;
 
+/// <summary>How the embedded browser gets to the file.</summary>
+public enum BrowserDownloadMode
+{
+    /// <summary>Bunkr's file page, then its download page's button.</summary>
+    Bunkr,
+
+    /// <summary>
+    /// Any page: press a same-site Download control if one is found,
+    /// otherwise wait for the user to press it. The file is captured
+    /// either way.
+    /// </summary>
+    Generic
+}
+
 /// <summary>A file a real browser session downloaded into a temporary path.</summary>
 public sealed record BrowserDownloadResult(
     string TemporaryPath,
@@ -20,7 +34,7 @@ public interface IBrowserDownloader
     Task<BrowserDownloadResult> DownloadAsync(
         Uri page,
         string destinationDirectory,
-        string? displayName,
+        BrowserDownloadMode mode,
         IProgress<DownloadTransferProgress>? progress,
         CancellationToken cancellationToken);
 }

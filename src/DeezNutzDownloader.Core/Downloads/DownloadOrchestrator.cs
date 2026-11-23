@@ -584,7 +584,8 @@ public sealed class DownloadOrchestrator : IDisposable
                 itemDirectory,
                 state.MaxBytesPerSecond,
                 state.ConnectionsPerDownload,
-                PartialDownloadFiles.KeyFor(item.Id));
+                PartialDownloadFiles.KeyFor(item.Id),
+                item.PreferBrowser);
 
             var progress =
                 new InlineProgress<

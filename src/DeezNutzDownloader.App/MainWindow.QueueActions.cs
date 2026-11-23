@@ -311,6 +311,28 @@ public partial class MainWindow
         }
     }
 
+    private async void DownloadInBrowser_Click(object sender, RoutedEventArgs e)
+    {
+        var queued = new List<Guid>();
+
+        foreach (DownloadQueueItem item in TargetItems(sender)
+                     .Where(item => item.State != DownloadQueueItemState.Downloading))
+        {
+            if (_downloadQueue.TryRequeueViaBrowser(item.Id))
+            {
+                queued.Add(item.Id);
+            }
+        }
+
+        if (queued.Count == 0)
+        {
+            ApplicationStatusText.Text = "Pick rows that are not downloading right now.";
+            return;
+        }
+
+        await StartBatchAsync(queued);
+    }
+
     // ---------- Order ----------
 
     private void DownloadNext_Click(object sender, RoutedEventArgs e) =>
@@ -601,6 +623,8 @@ public partial class MainWindow
         MenuCancel.IsEnabled =
             _activeDownloadOrchestrator is not null &&
             selected.Any(item => item.State == DownloadQueueItemState.Downloading);
+        MenuViaBrowser.IsEnabled =
+            selected.Any(item => item.State != DownloadQueueItemState.Downloading);
         MenuDownloadNext.IsEnabled = any;
         MenuMoveUp.IsEnabled = any;
         MenuMoveDown.IsEnabled = any;

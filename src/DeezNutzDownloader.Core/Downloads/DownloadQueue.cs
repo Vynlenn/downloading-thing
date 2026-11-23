@@ -43,7 +43,8 @@ public sealed record DownloadQueueItem(
     DateTimeOffset? RetryAfterUtc = null,
     int AutoRetryCount = 0,
     LinkCheckStatus LinkStatus = LinkCheckStatus.Unchecked,
-    string? LinkStatusMessage = null)
+    string? LinkStatusMessage = null,
+    bool PreferBrowser = false)
 {
     public string Status =>
         State == DownloadQueueItemState.Queued && RetryAfterUtc.HasValue
@@ -180,6 +181,9 @@ public sealed record DownloadQueueItem(
 
             DownloadQueueItemState.Queued when BytesReceived > 0 =>
                 "Waiting to resume" + FormatSavedSuffix(),
+
+            DownloadQueueItemState.Queued when PreferBrowser =>
+                "Waiting to start (downloads in the built-in browser)",
 
             DownloadQueueItemState.Queued =>
                 "Waiting to start",
@@ -1092,6 +1096,30 @@ public sealed class DownloadQueue
         return changed;
     }
 
+    /// <summary>
+    /// Queues an item again to download through the embedded browser
+    /// (for links that answer with a page instead of the file).
+    /// </summary>
+    public bool TryRequeueViaBrowser(Guid itemId)
+    {
+        return Update(
+            itemId,
+            current => current.State != DownloadQueueItemState.Downloading,
+            current => current with
+            {
+                State = DownloadQueueItemState.Queued,
+                PreferBrowser = true,
+                BytesReceived = 0,
+                TotalBytes = null,
+                DestinationPath = null,
+                SavedFileName = null,
+                ErrorMessage = null,
+                SpeedBytesPerSecond = null,
+                RetryAfterUtc = null,
+                AutoRetryCount = 0
+            });
+    }
+
     public bool SetLinkStatus(
         Guid itemId,
         LinkCheckStatus status,
@@ -1315,7 +1343,8 @@ public sealed class DownloadQueue
                         Enum.IsDefined(persisted.LinkStatus)
                             ? persisted.LinkStatus
                             : LinkCheckStatus.Unchecked,
-                        persisted.LinkStatusMessage));
+                        persisted.LinkStatusMessage,
+                        persisted.PreferBrowser));
             }
         }
 

@@ -30,6 +30,11 @@ Requires .NET 8 (self-contained in the portable zip).
   - Bunkr albums expand to one row per file (names and sizes up front);
     each file downloads through the built-in browser using Bunkr's own
     page flow, one at a time, pop-ups blocked.
+  - Filester file links (/d/...) download through the built-in browser;
+    thumbnail links (/t/...) are refused with a clear message.
+  - **Download in browser** (right-click any row): for links that open a
+    page instead of the file, the built-in browser presses the page's own
+    same-site Download button (or you do) and the file is caught.
   - MediaFire shares, MEGA files and folders (client-side decryption),
     generic HTTP(S) with resume and 429/503 backoff.
   - yt-dlp video — format picker, playlists, subtitle sidecars,
