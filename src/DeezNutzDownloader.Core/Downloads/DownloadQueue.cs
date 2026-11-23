@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using DeezNutzDownloader.Core.Links;
 
 namespace DeezNutzDownloader.Core.Downloads;
@@ -46,6 +47,21 @@ public sealed record DownloadQueueItem(
         string.IsNullOrWhiteSpace(SavedFileName)
             ? DisplayName
             : SavedFileName;
+
+    /// <summary>
+    /// Re-evaluated from the current name, so the warning updates
+    /// when the server's real filename replaces the URL guess.
+    /// </summary>
+    [JsonIgnore]
+    public FileSafetyAssessment Safety =>
+        FileTypeSafety.Assess(EffectiveDisplayName);
+
+    [JsonIgnore]
+    public string? SafetyWarning => Safety.Message;
+
+    [JsonIgnore]
+    public bool IsDangerous =>
+        Safety.Level == FileSafetyLevel.Danger;
 
     public double ProgressPercentage
     {

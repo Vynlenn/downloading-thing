@@ -1054,7 +1054,8 @@ public partial class MainWindow : Window
             if (!_isClosing)
             {
                 ApplicationStatusText.Text =
-                    CreateBatchStatusText(result);
+                    CreateBatchStatusText(result) +
+                    CreateSafetySummary(startableItems);
 
                 await TryWriteDownloadLogAsync(
                     $"Download batch finished. " +
@@ -1740,6 +1741,47 @@ public partial class MainWindow : Window
                 "cannot be created.",
                 exception);
         }
+    }
+
+    /// <summary>
+    /// One line after a batch when files it finished can run code,
+    /// so the per-row warnings are not missed on a long queue.
+    /// </summary>
+    private string CreateSafetySummary(
+        IEnumerable<DownloadQueueItem> batchItems)
+    {
+        var batchIds = batchItems
+            .Select(item => item.Id)
+            .ToHashSet();
+
+        DownloadQueueItem[] flagged = _downloadQueue.Items
+            .Where(item =>
+                batchIds.Contains(item.Id) &&
+                item.State == DownloadQueueItemState.Completed &&
+                item.Safety.Level != FileSafetyLevel.None)
+            .ToArray();
+
+        if (flagged.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        int disguised = flagged.Count(item => item.IsDangerous);
+
+        string summary =
+            $". {flagged.Length} downloaded file" +
+            (flagged.Length == 1 ? " can" : "s can") +
+            " run code when opened";
+
+        if (disguised > 0)
+        {
+            summary +=
+                $" ({disguised} disguised as " +
+                (disguised == 1 ? "a document or media file" : "documents or media files") +
+                ")";
+        }
+
+        return summary + " - check the warnings in the queue first.";
     }
 
     private static string CreateBatchStatusText(

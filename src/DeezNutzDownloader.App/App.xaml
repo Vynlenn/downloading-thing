@@ -23,6 +23,9 @@
         <SolidColorBrush x:Key="SidebarBrush" Color="#FF0C1411" />
         <SolidColorBrush x:Key="SurfaceHoverBrush" Color="#FF1E2F26" />
         <SolidColorBrush x:Key="ErrorBrush" Color="#FFF87171" />
+        <SolidColorBrush x:Key="WarningBrush" Color="#FFFBBF24" />
+        <SolidColorBrush x:Key="WarningSoftBrush" Color="#FF3A2E0C" />
+        <SolidColorBrush x:Key="ErrorSoftBrush" Color="#FF3B1414" />
 
         <DropShadowEffect x:Key="MenuShadow"
                           Color="#FF000000"
